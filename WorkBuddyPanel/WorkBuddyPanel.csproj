@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- 只为托盘图标（NotifyIcon）打开 WinForms；下面的 Using Remove 把 SDK 自动
+         注入的 global using 去掉，否则 System.Windows.Forms 会和 WPF 的同名类型打架 -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>WorkBuddyPanel</RootNamespace>
+    <AssemblyName>WorkBuddyPanel</AssemblyName>
+    <Version>1.0.0</Version>
+    <AssemblyTitle>WorkBuddy 控制台</AssemblyTitle>
+    <Product>WorkBuddy 控制台</Product>
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <!-- 零第三方依赖：只用 WPF + BCL -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+</Project>

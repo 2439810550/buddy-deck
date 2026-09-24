@@ -1,0 +1,32 @@
+# ── 构建产物 ──────────────────────────────────────────
+**/bin/
+**/obj/
+**/publish/
+**/.cache/
+**/node_modules/
+*.user
+
+# ── 本地配置与凭据：绝对不要提交 ────────────────────────
+# 账号保险库（含 refreshToken）
+accounts*.json
+auth*.json
+*.info
+settings.json
+settings.json.broken
+maintain.log
+*.bak
+
+# 临时/调试目录
+_t/
+
+# 编辑器
+.vs/
+.idea/
+.vscode/
+*.swp
+
+# ── 第三方项目：它是别人仓库的克隆，README 里给链接 ──────
+dsh-workbuddy-connect/
+
+# 和 workbuddy_api/ 内容重复的压缩包
+workbuddy_api.zip

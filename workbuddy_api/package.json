@@ -1,0 +1,41 @@
+{
+  "name": "workbuddy-api",
+  "version": "0.2.0",
+  "description": "Standalone WorkBuddy auth + OpenAI-compatible local gateway. Reuses the WorkBuddy desktop app's sign-in (plaintext or 5.6+ encrypted) so any CLI, editor or SDK can call WorkBuddy models through a plain OpenAI base_url.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": "^20.10.0 || ^22.0.0 || >=24.0.0"
+  },
+  "bin": {
+    "workbuddy-api": "src/bin.js",
+    "wb": "src/bin.js"
+  },
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node src/bin.js serve",
+    "status": "node src/bin.js status",
+    "doctor": "node src/bin.js doctor",
+    "verify": "node scripts/verify.mjs"
+  },
+  "keywords": [
+    "workbuddy",
+    "codebuddy",
+    "openai-compatible",
+    "proxy",
+    "gateway",
+    "llm"
+  ],
+  "dependencies": {},
+  "devDependencies": {}
+}

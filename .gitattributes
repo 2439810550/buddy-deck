@@ -1,0 +1,15 @@
+# 仓库里统一存 LF；工作区按平台还原。
+# 显式声明是为了不受 core.autocrlf 影响，避免每次提交都出现全文件 diff。
+* text=auto
+
+# PowerShell 脚本保持 CRLF（里面有 BOM，别让工具链改它）
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制
+*.png binary
+*.ico binary
+*.exe binary
+*.dll binary
+*.zip binary

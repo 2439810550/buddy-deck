@@ -1,0 +1,410 @@
+[
+  {
+    "id": "default-model",
+    "name": "Auto",
+    "contextWindow": 176000,
+    "maxTokens": 24000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": false,
+      "onlyReasoning": false,
+      "canDisableThinking": true
+    },
+    "billing": {
+      "free": false
+    }
+  },
+  {
+    "id": "fast-model",
+    "name": "Fast",
+    "contextWindow": 200000,
+    "maxTokens": 32000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "defaultEffort": "medium",
+      "canDisableThinking": false
+    },
+    "billing": {
+      "credits": "x0.34",
+      "free": false
+    }
+  },
+  {
+    "id": "balanced-model",
+    "name": "Balanced",
+    "contextWindow": 256000,
+    "maxTokens": 32000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "defaultEffort": "medium",
+      "canDisableThinking": false
+    },
+    "billing": {
+      "credits": "x0.59",
+      "free": false
+    }
+  },
+  {
+    "id": "primary-model",
+    "name": "Primary",
+    "contextWindow": 272000,
+    "maxTokens": 72000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "defaultEffort": "high",
+      "canDisableThinking": false
+    },
+    "billing": {
+      "credits": "x3.31",
+      "free": false
+    }
+  },
+  {
+    "id": "deep-model",
+    "name": "Deep",
+    "contextWindow": 176000,
+    "maxTokens": 24000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": false,
+      "onlyReasoning": false,
+      "canDisableThinking": true
+    },
+    "billing": {
+      "credits": "x3.33",
+      "free": false
+    }
+  },
+  {
+    "id": "hy4-preview-f",
+    "name": "Hy4 preview",
+    "contextWindow": 300000,
+    "defaultContextWindow": 300000,
+    "supportedContextWindows": [
+      300000,
+      1000000
+    ],
+    "maxTokens": 64000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "supportedEfforts": [
+        "high"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": false
+    },
+    "billing": {
+      "free": false,
+      "rateUnknown": true
+    }
+  },
+  {
+    "id": "hy3",
+    "name": "Hy3",
+    "contextWindow": 192000,
+    "maxTokens": 64000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "supportedEfforts": [
+        "low",
+        "high"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": false
+    },
+    "billing": {
+      "free": false,
+      "rateUnknown": true
+    }
+  },
+  {
+    "id": "deepseek-v4.1-flash",
+    "name": "Deepseek-V4.1-Flash",
+    "contextWindow": 300000,
+    "defaultContextWindow": 300000,
+    "supportedContextWindows": [
+      300000,
+      1000000
+    ],
+    "maxTokens": 128000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "defaultEffort": "high",
+      "canDisableThinking": false
+    },
+    "billing": {
+      "free": false,
+      "rateUnknown": true
+    }
+  },
+  {
+    "id": "gpt-6-astra",
+    "name": "GPT-6-Astra",
+    "contextWindow": 400000,
+    "defaultContextWindow": 400000,
+    "supportedContextWindows": [
+      400000,
+      1000000
+    ],
+    "maxTokens": 128000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "supportedEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
+      "canDisableThinking": true
+    },
+    "billing": {
+      "credits": "x6.67",
+      "free": false
+    }
+  },
+  {
+    "id": "gpt-5.6-sol",
+    "name": "GPT-5.6-Sol",
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "supportedEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
+      "canDisableThinking": true
+    },
+    "billing": {
+      "credits": "x3.47",
+      "free": false
+    }
+  },
+  {
+    "id": "gpt-5.6-terra",
+    "name": "GPT-5.6-Terra",
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "supportedEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
+      "canDisableThinking": true
+    },
+    "billing": {
+      "credits": "x1.39",
+      "free": false
+    }
+  },
+  {
+    "id": "gpt-5.6-luna",
+    "name": "GPT-5.6-Luna",
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "supportedEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
+      "canDisableThinking": true
+    },
+    "billing": {
+      "credits": "x0.14",
+      "free": false
+    }
+  },
+  {
+    "id": "gpt-5.5",
+    "name": "GPT-5.5",
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "supportedEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "medium",
+      "canDisableThinking": false
+    },
+    "billing": {
+      "credits": "x3.31",
+      "free": false
+    }
+  },
+  {
+    "id": "gpt-5.4",
+    "name": "GPT-5.4",
+    "contextWindow": 272000,
+    "maxTokens": 72000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "supportedEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "medium",
+      "canDisableThinking": false
+    },
+    "billing": {
+      "credits": "x1.65",
+      "free": false
+    }
+  },
+  {
+    "id": "gpt-5.3-codex",
+    "name": "GPT-5.3-Codex",
+    "contextWindow": 272000,
+    "maxTokens": 72000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "defaultEffort": "medium",
+      "canDisableThinking": false
+    },
+    "billing": {
+      "credits": "x1.25",
+      "free": false
+    }
+  },
+  {
+    "id": "gemini-3.5-flash",
+    "name": "Gemini-3.5-Flash",
+    "contextWindow": 1000000,
+    "maxTokens": 65536,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "defaultEffort": "medium",
+      "canDisableThinking": false
+    },
+    "billing": {
+      "credits": "x0.99",
+      "free": false
+    }
+  },
+  {
+    "id": "glm-5.3",
+    "name": "GLM-5.3",
+    "contextWindow": 1000000,
+    "maxTokens": 48000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "supportedEfforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": true
+    },
+    "billing": {
+      "credits": "x0.79",
+      "free": false
+    }
+  },
+  {
+    "id": "glm-5.2",
+    "name": "GLM-5.2",
+    "contextWindow": 1000000,
+    "maxTokens": 48000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "supportedEfforts": [
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": true
+    },
+    "billing": {
+      "credits": "x0.79",
+      "free": false
+    }
+  },
+  {
+    "id": "kimi-k3",
+    "name": "Kimi-K3",
+    "contextWindow": 1000000,
+    "maxTokens": 32000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "defaultEffort": "medium",
+      "canDisableThinking": false
+    },
+    "billing": {
+      "credits": "x1.62",
+      "free": false
+    }
+  },
+  {
+    "id": "kimi-k2.6",
+    "name": "Kimi-K2.6",
+    "contextWindow": 256000,
+    "maxTokens": 32000,
+    "supportsImages": true,
+    "reasoning": {
+      "supports": true,
+      "onlyReasoning": true,
+      "defaultEffort": "medium",
+      "canDisableThinking": false
+    },
+    "billing": {
+      "credits": "x0.52",
+      "free": false
+    }
+  }
+]

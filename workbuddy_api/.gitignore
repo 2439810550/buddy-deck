@@ -1,0 +1,8 @@
+node_modules/
+*.log
+.DS_Store
+.env
+
+# local runtime state (never commit: contains credential copies)
+.workbuddy-api/
+*.workbuddy-auth.json
