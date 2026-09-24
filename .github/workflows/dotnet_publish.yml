@@ -1,0 +1,75 @@
+name: Build Installer
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    # ── 1. 检出代码 ──────────────────────────────────────────
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    # ── 2. 安装 .NET 8 ───────────────────────────────────────
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    # ── 3. 缓存 Node zip ─────────────────────────────────────
+    - name: Cache Node zip
+      uses: actions/cache@v4
+      with:
+        path: .cache
+        key: node-${{ runner.os }}-22.23.3
+
+    # ── 4. 安装 Inno Setup 6 ─────────────────────────────────
+    - name: Install Inno Setup
+      run: choco install innosetup --no-progress -y
+
+    # ── 5. 跑一键打包 ────────────────────────────────────────
+    # tag 就用 tag 名当版本（去掉 v 前缀），否则用默认的 1.0.0。
+    # 用 -replace 而不是 TrimStart：TrimStart 剥的是"字符集"不是"前缀"，
+    # 会把 V1.0.0 里的 V 留下、也会把 version1.0 啃掉半个单词。
+    - name: Build installer
+      shell: pwsh
+      working-directory: WorkBuddyPanel
+      run: |
+        if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}" -replace '^[vV]', ''
+        } else {
+            $version = "1.0.0"
+        }
+        if ($version -notmatch '^\d+\.\d+') {
+            Write-Error "tag 解析出来的版本号不像版本号：'$version'。请用 v1.0.0 这样的 tag 名。"
+            exit 1
+        }
+        Write-Host "Building version: $version"
+        ./make-installer.ps1 -Version $version
+
+    # ── 6. 上传安装包 ─────────────────────────────────────────
+    - name: Upload installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: BuddyDeck-Setup
+        path: WorkBuddyPanel/dist/BuddyDeck-Setup-*.exe
+        if-no-files-found: error
+
+    # ── 7. tag 触发时发 Release ──────────────────────────────
+    # 挂上去的就是第 5 步产出的那个安装包 exe（Inno Setup 打的单文件安装程序），
+    # 不是 zip、不是文件夹 —— 用户下载下来双击就能装。
+    - name: Create Release
+      if: github.ref_type == 'tag'
+      uses: softprops/action-gh-release@v2
+      with:
+        files: WorkBuddyPanel/dist/BuddyDeck-Setup-*.exe
+        generate_release_notes: true
