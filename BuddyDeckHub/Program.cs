@@ -367,9 +367,14 @@ admin.MapPatch("/channels/{id}", async (HubStore s, string id, ChannelInput inpu
 
     if (input.Name is not null) c.Name = input.Name;
     if (input.ApiKey is not null) c.ApiKey = input.ApiKey;
+    if (input.BaseUrl is not null) c.BaseUrl = input.BaseUrl;
+    if (input.DataHome is not null) c.DataHome = input.DataHome;
+    if (input.NodePath is not null) c.NodePath = input.NodePath;
+    if (input.ScriptDir is not null) c.ScriptDir = input.ScriptDir;
     if (input.Priority is not null) c.Priority = input.Priority.Value;
     if (input.Enabled is not null) c.Enabled = input.Enabled.Value;
     if (input.Models is not null) c.Models = input.Models;
+    if (input.Groups is not null) c.Groups = input.Groups;
 
     await s.SaveAsync();
     return Results.Ok(new { ok = true });

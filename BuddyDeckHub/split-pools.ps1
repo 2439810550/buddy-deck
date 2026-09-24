@@ -103,8 +103,21 @@ function Write-Pool($name, $accounts, $all) {
     }
 
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    # 里面是 refreshToken，等同账号密码 —— 0600 权限
     [System.IO.File]::WriteAllText($file, $json, [System.Text.UTF8Encoding]::new($false))
+
+    # 里面是 refreshToken，等同账号密码 —— 把权限收到只剩自己。
+    # 实测新建的文件默认继承父目录的 ACL，会给 Users 组读权限，太松了。
+    try {
+        $acl = Get-Acl $file
+        $acl.SetAccessRuleProtection($true, $false)     # 断开继承
+        $acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
+        $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $me, 'FullControl', 'Allow')))
+        Set-Acl $file $acl
+    } catch {
+        Write-Host ("      ! 收紧权限失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
+    }
 
     $labels = ($accounts | ForEach-Object { Label-Of $_ }) -join ", "
     Write-Host ("  ✓ {0,-10} {1,2} 个号  {2}" -f $name, $accounts.Count, $labels) -ForegroundColor Green

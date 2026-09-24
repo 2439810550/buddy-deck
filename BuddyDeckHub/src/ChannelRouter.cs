@@ -25,6 +25,9 @@ public sealed class ChannelRouter
 
     /// <summary>
     /// 给一个分组挑出候选渠道，按「该先试谁」排好序。
+    ///
+    /// ⚠ 这只是**看**，不占位。真要发请求请用 <see cref="Acquire"/>，
+    /// 否则并发下会所有请求都选中同一个渠道（踩过：9 个并发全落到第一个渠道）。
     /// </summary>
     public List<Channel> Candidates(Group group, string model)
     {
@@ -42,9 +45,60 @@ public sealed class ChannelRouter
                         c.Models.Any(m => ModelMatches(m, model)))
             // 分组允许的模型也要过
             .Where(c => GroupAllows(group, model))
-            .OrderBy(c => c.Priority)
-            .ThenBy(c => Volatile.Read(ref c.InFlight))
+            .OrderBy(c => c.InFlight)
+            .ThenBy(c => c.Priority)
             .ToList();
+    }
+
+    /// <summary>
+    /// 原子地「选一个渠道并占位」。
+    ///
+    /// 为什么要把这两步合并：
+    ///   分开做的话，两个并发请求会同时看到「所有渠道都在途 0 个」，
+    ///   于是双双选中第一个渠道 —— 结果就是负载完全不分散。
+    ///   在一个 lock 里选完就加计数，才能保证第二个请求看到第一个的占位。
+    ///
+    /// 返回 null 表示没渠道可用。用完记得 <see cref="Release"/>。
+    /// </summary>
+    public Channel? Acquire(Group group, string model, ISet<string>? exclude = null)
+    {
+        lock (_gate)
+        {
+            var now = DateTimeOffset.Now;
+            var all = _store.Config.Channels;
+
+            IEnumerable<Channel> pool = group.Channels.Count > 0
+                ? all.Where(c => group.Channels.Contains(c.Id))
+                : all;
+
+            var pick = pool
+                .Where(c => c.IsAvailable(now))
+                .Where(c => c.Models.Count == 0 || c.Models.Any(m => ModelMatches(m, model)))
+                .Where(c => GroupAllows(group, model))
+                .Where(c => exclude is null || !exclude.Contains(c.Id))
+                // 排序顺序很关键 —— 先负载，再优先级。
+                //
+                // 反过来的话（先 Priority 再 InFlight），优先级数字最小的永远排第一，
+                // 无论它多忙都选中它 —— 负载完全不分散。
+                // 实测：12 个并发请求全部落到同一个渠道。
+                //
+                // priority 的语义是「同等负载下先选谁」，不是「无条件先选谁」。
+                .OrderBy(c => c.InFlight)
+                .ThenBy(c => c.Priority)
+                .FirstOrDefault();
+
+            if (pick is not null) pick.InFlight++;
+            return pick;
+        }
+    }
+
+    /// <summary>释放占位。和 Acquire 配对，务必在 finally 里调。</summary>
+    public void Release(Channel c)
+    {
+        lock (_gate)
+        {
+            if (c.InFlight > 0) c.InFlight--;
+        }
     }
 
     /// <summary>模型名匹配，支持末尾 * 通配。deepseek-* 能匹到 deepseek-v4-pro。</summary>
@@ -95,9 +149,6 @@ public sealed class ChannelRouter
                 c.Id, c.ConsecutiveFailures, seconds, error);
         }
     }
-
-    public void Enter(Channel c) => Interlocked.Increment(ref c.InFlight);
-    public void Exit(Channel c) => Interlocked.Decrement(ref c.InFlight);
 
     /// <summary>给管理界面看的健康快照。</summary>
     public List<object> Health()

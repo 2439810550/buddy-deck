@@ -126,9 +126,11 @@ public sealed class ProxyService
             }
         }
 
-        // ── 3. 挑渠道 ──
-        var candidates = _router.Candidates(ctx.Group, model);
-        if (candidates.Count == 0)
+        // ── 3. 依次试 ──
+        //
+        // 用 Acquire 一个一个拿（原子「选 + 占位」），而不是先拿一堆候选再进。
+        // 先看一遍只是为了在完全没渠道时给一个清楚的错误。
+        if (_router.Candidates(ctx.Group, model).Count == 0)
         {
             await WriteErrorAsync(http, 503, "no_channel_available",
                 model == ""
@@ -137,15 +139,18 @@ public sealed class ProxyService
             return true;
         }
 
-        // ── 4. 依次试 ──
         HttpResponseMessage? upstream = null;
         Channel? chosen = null;
         string? lastError = null;
         var lastStatus = 503;
+        var tried = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var channel in candidates)
+        while (true)
         {
-            _router.Enter(channel);
+            var channel = _router.Acquire(ctx.Group, model, tried);
+            if (channel is null) break;          // 没得试了
+            tried.Add(channel.Id);
+
             try
             {
                 var (resp, err) = await TryOnceAsync(http, channel, body, ct);
@@ -160,7 +165,8 @@ public sealed class ProxyService
             }
             finally
             {
-                if (upstream is null) _router.Exit(channel);
+                // 成功了就保持占位（直到响应写完），失败就立刻释放让下一个人用
+                if (upstream is null) _router.Release(channel);
             }
 
             if (ct.IsCancellationRequested) break;
@@ -235,7 +241,7 @@ public sealed class ProxyService
         }
         finally
         {
-            _router.Exit(chosen);
+            _router.Release(chosen);
             upstream.Dispose();
         }
     }
