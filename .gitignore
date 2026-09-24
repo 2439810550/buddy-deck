@@ -35,3 +35,10 @@ workbuddy_api.zip
 AGENTS.md
 .pi-must-not-kill.md
 inv-final.json
+
+# 打包输出（build.ps1 的 -Output 会生成 publish.next 之类）
+publish*
+!publish/README*
+
+# 临时测试目录
+_t/

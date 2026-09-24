@@ -30,6 +30,7 @@ import {
   prepareBodyFor,
 } from "./upstream.js";
 import { beginSse, createModelResolver } from "./protocol.js";
+import { RateLimitTracker, describeRateLimit, isRateLimited, pickFallbackModel } from "./ratelimit.js";
 import * as anthropic from "./anthropic.js";
 import * as responses from "./responses.js";
 
@@ -125,6 +126,27 @@ function keyMatches(expected, presented) {
   const b = Buffer.from(expected);
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
+}
+
+/**
+ * 把一段 SSE 分片里的 model 字段换成实际用的那个。
+ *
+ * 换过模型重试时，让客户端看到的模型名和最终生效的一致，不然对不上。
+ * 解析失败就原样返回 —— 绝不因为改个名字把流转坏。
+ */
+function renameChunkModel(payload, model) {
+  if (typeof model !== "string" || model === "") return payload;
+  try {
+    const chunk = JSON.parse(payload);
+    if (typeof chunk !== "object" || chunk === null || Array.isArray(chunk)) return payload;
+    if (typeof chunk["model"] === "string" && chunk["model"] !== model) {
+      chunk["model"] = model;
+      return JSON.stringify(chunk);
+    }
+    return payload;
+  } catch {
+    return payload;
+  }
 }
 
 /** The bearer token from a request's Authorization header, if present. */
@@ -234,6 +256,68 @@ export function createGateway(options) {
     defaultModel: options.defaultModel,
     log,
   });
+
+  // 哪个「账号+模型」被限流到什么时候。进程内共用一份。
+  //
+  // 为什么要有这个：上游 429 的原文是「使用量已超出频率限制…您也可以切换其他模型
+  // 继续使用」—— 限制是按账号+模型算的。所以被拦之后：
+  //   1. 换一个模型接着发（用户完全无感）
+  //   2. 把被拦的模型记进冷却表，窗口内不再拿它白试
+  const rateLimits = new RateLimitTracker();
+
+  /**
+   * 发一次上游请求；被限流就**换模型重试**。
+   *
+   * 为什么能安全重试：`chatStream` 是在响应头阶段就判定失败的（还没开始吐内容），
+   * 所以重试不会产生半截输出。
+   *
+   * @param {object} params
+   * @param {object} params.credential
+   * @param {object} params.request 已经解析好的、面向适配层的请求体
+   * @param {string} params.model 本次用的模型
+   * @param {AbortSignal} params.signal
+   * @param {(body: object) => string} params.prepare 把请求体变成上游要的形状
+   * @param {string} params.tag 日志前缀
+   * @returns {Promise<{result: object, model: string, attempts: string[]}>}
+   */
+  async function sendWithFallback({ credential, request, model, signal, prepare, tag }) {
+    const account = `${credential.uid}:${credential.enterpriseId ?? ""}`;
+    const attempts = [];
+    let current = model;
+    let result;
+
+    // 最多试 4 次（首个 + 3 个备用）。再多了就是白试，该让用户看见错误。
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (rateLimits.isCooling(account, current)) {
+        // 这个模型还在冷却里，直接跳过，连请求都不发
+        log(`${tag} 跳过 ${current}（冷却中）`);
+        attempts.push(`${current}:冷却中`);
+      } else {
+        result = await client.chatStream(credential, prepare(request), signal);
+        if (result.ok) return { result, model: current, attempts };
+        if (!isRateLimited(result)) return { result, model: current, attempts };
+
+        const info = describeRateLimit(result);
+        const until = rateLimits.mark(account, current, { resetAt: info.resetAt, text: result.message });
+        log(`${tag} ${current} 被限流，${new Date(until).toLocaleString()} 前不再使用`);
+        attempts.push(`${current}:限流`);
+      }
+
+      const next = pickFallbackModel({
+        models: catalog.current(),
+        exclude: current,
+        cooling: rateLimits.coolingModels(account),
+      });
+      if (next === undefined || next === current) {
+        // 没有可用的备用模型了，把最后一次的真实错误交出去
+        return { result: result ?? { ok: false, status: 429, kind: "soft_rate", message: "所有可用模型都在限流冷却中" }, model: current, attempts };
+      }
+      log(`${tag} 换成 ${next} 重试`);
+      current = next;
+    }
+
+    return { result, model: current, attempts };
+  }
 
   const server = createServer((req, res) => {
     handle(req, res).catch((error) => {
@@ -347,22 +431,35 @@ export function createGateway(options) {
     };
 
     const wantsStream = request["stream"] === true;
-    const prepared = prepareBodyFor(variant, adapter.toChat(request, ctx));
 
     const controller = new AbortController();
     req.on("close", () => controller.abort());
 
-    const result = await client.chatStream(credential, prepared, controller.signal);
+    // 带换模型重试的发送：某个模型被限流时会自动换下一个，用户无感。
+    const { result, model: usedModel, attempts } = await sendWithFallback({
+      credential,
+      request,
+      model: ctx.model,
+      signal: controller.signal,
+      prepare: (body) => prepareBodyFor(variant, adapter.toChat(body, ctx)),
+      tag: `[${adapter.name}]`,
+    });
+
     if (!result.ok) {
-      log(`[${adapter.name}] upstream ${result.kind} (http ${result.status})`);
+      log(`[${adapter.name}] upstream ${result.kind} (http ${result.status}) 试过：${attempts.join(" → ") || "-"}`);
+      const extra = attempts.length > 1 ? `（已试过 ${attempts.join(" → ")}）` : "";
       const shaped = adapter.error(
         KIND_STATUS[result.kind] ?? 502,
         result.kind,
-        `workbuddy upstream ${result.kind} (http ${result.status}): ${result.message.slice(0, 400)}`,
+        `workbuddy upstream ${result.kind} (http ${result.status}): ${result.message.slice(0, 400)}${extra}`,
       );
       writeJson(res, shaped.status, shaped.body);
       return;
     }
+
+    // 回给客户端的模型名要用**实际用的那个** —— 换过模型的话，
+    // 不然日志和界面对不上，排查时会很迷惑。
+    ctx.model = usedModel;
 
     if (!wantsStream) {
       const completion = await collectChatCompletion(result.response);
@@ -375,7 +472,7 @@ export function createGateway(options) {
     try {
       for await (const payload of iterateSseData(result.response.body)) {
         if (payload === "[DONE]") break;
-        writer.push(payload);
+        writer.push(renameChunkModel(payload, usedModel));
       }
       writer.finish();
     } catch (error) {
@@ -401,24 +498,37 @@ export function createGateway(options) {
     }
 
     const wantsStream = request["stream"] === true;
-    const prepared = prepareBodyFor(variant, request);
     const controller = new AbortController();
     req.on("close", () => controller.abort());
 
-    const result = await client.chatStream(credential, prepared, controller.signal);
+    const resolvedModel = resolveModel(request["model"]);
+    const { result, model: usedModel, attempts } = await sendWithFallback({
+      credential,
+      request,
+      model: resolvedModel.model,
+      signal: controller.signal,
+      prepare: (body) => prepareBodyFor(variant, body),
+      tag: "",
+    });
+
     if (!result.ok) {
-      log(`upstream ${result.kind} (http ${result.status})`);
+      log(`upstream ${result.kind} (http ${result.status}) 试过：${attempts.join(" → ") || "-"}`);
+      const extra = attempts.length > 1 ? `（已试过 ${attempts.join(" → ")}）` : "";
       writeOpenAIError(
         res,
         KIND_STATUS[result.kind] ?? 502,
         result.kind,
-        `workbuddy upstream ${result.kind} (http ${result.status}): ${result.message.slice(0, 400)}`,
+        `workbuddy upstream ${result.kind} (http ${result.status}): ${result.message.slice(0, 400)}${extra}`,
       );
       return;
     }
 
     if (!wantsStream) {
       const completion = await collectChatCompletion(result.response);
+      // 换过模型时，把响应的 model 字段改成实际用的那个
+      if (typeof completion === "object" && completion !== null && usedModel !== undefined) {
+        completion["model"] = usedModel;
+      }
       writeJson(res, 200, completion);
       return;
     }
@@ -437,7 +547,7 @@ export function createGateway(options) {
           res.write("data: [DONE]\n\n");
           break;
         }
-        const sanitized = sanitizeChunk(payload);
+        const sanitized = sanitizeChunk(renameChunkModel(payload, usedModel));
         if (sanitized === undefined) continue;
         res.write(`data: ${sanitized}\n\n`);
       }

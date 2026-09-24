@@ -200,10 +200,51 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Style="{StaticResource CardStyle}" Visibility="{Binding PathsOk, Converter={StaticResource BoolToVisInv}}">
+                        <!-- 环境体检（只在缺东西的时候出现） -->
+                        <Border Style="{StaticResource CardStyle}">
                             <StackPanel>
-                                <TextBlock Text="⚠ 环境没配好" Style="{StaticResource H1}" Foreground="{StaticResource Bad}" />
-                                <TextBlock Text="{Binding PathsHint}" Style="{StaticResource Sub}" />
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <TextBlock Text="运行环境" FontSize="20" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextMain}" Margin="0" />
+                                    <Border Background="#FFE9E9" BorderBrush="#F5B5B5" BorderThickness="1"
+                                            CornerRadius="4" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center"
+                                            Visibility="{Binding HasEnvironmentProblem, Converter={StaticResource BoolToVis}}">
+                                        <TextBlock Text="缺东西，跑不起来" FontSize="11" Foreground="#8B1A1A" />
+                                    </Border>
+                                </StackPanel>
+
+                                <ItemsControl ItemsSource="{Binding EnvironmentChecks}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,0,0,6">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="200" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="{Binding Glyph}" FontSize="13"
+                                                           Margin="0,0,8,0" Foreground="{Binding Brush}" />
+                                                <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="13"
+                                                           FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                <TextBlock Grid.Column="2" Text="{Binding Detail}" FontSize="12"
+                                                           FontFamily="Consolas, Microsoft YaHei UI"
+                                                           Foreground="{StaticResource TextSub}" TextWrapping="Wrap" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,12,0,0">
+                                    <TextBlock Text="{Binding PathsHint}" Style="{StaticResource Sub}"
+                                               FontSize="12.5" TextWrapping="Wrap" />
+                                </Border>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <Button Content="重新体检" Style="{StaticResource PrimaryButton}"
+                                            Command="{Binding RefreshEnvironmentCommand}" MinWidth="100" />
+                                    <Button Content="自动探测" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                            Command="{Binding DetectPathsCommand}" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 

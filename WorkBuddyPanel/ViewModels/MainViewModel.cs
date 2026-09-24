@@ -156,6 +156,24 @@ public sealed class ChatMessageVm : ObservableObject
 }
 
 /// <summary>主界面全部状态与命令。</summary>
+/// <summary>环境体检里的一行。绑到界面上要 Brush 和字形，所以单独包一层。</summary>
+public sealed class EnvironmentCheckVm
+{
+    public EnvironmentCheckVm(string label, bool ok, string detail)
+    {
+        Label = label;
+        Ok = ok;
+        Detail = detail;
+    }
+
+    public string Label { get; }
+    public bool Ok { get; }
+    public string Detail { get; }
+    public string Glyph => Ok ? "✓" : "✕";
+    public System.Windows.Media.Brush Brush =>
+        MainViewModel.BrushFor(Ok ? "Ok" : "Bad");
+}
+
 public sealed partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly AppSettings _settings;
@@ -194,6 +212,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ClearLogCommand = new RelayCommand(() => Log.Clear());
         SaveSettingsCommand = new RelayCommand(SaveSettings);
         ResetSettingsCommand = new RelayCommand(ResetSettings);
+        // 体检要碰文件系统（几毫秒），丢后台跑，别卡 UI
+        RefreshEnvironmentCommand = new AsyncRelayCommand(
+            async () => await Task.Run(RefreshEnvironment), null, ReportError);
         DetectPathsCommand = new AsyncRelayCommand(DetectPathsAsync, null, ReportError);
         CopyBaseUrlCommand = new RelayCommand(() => CopyToClipboard(BaseUrl, "Base URL"));
         CopyApiKeyCommand = new RelayCommand(() => CopyToClipboard(ApiKey, "API Key"));
@@ -590,6 +611,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public RelayCommand ClearLogCommand { get; }
     public RelayCommand SaveSettingsCommand { get; private set; } = null!;
     public RelayCommand ResetSettingsCommand { get; private set; } = null!;
+    public AsyncRelayCommand RefreshEnvironmentCommand { get; private set; } = null!;
     public AsyncRelayCommand DetectPathsCommand { get; }
     public RelayCommand CopyBaseUrlCommand { get; }
     public RelayCommand CopyApiKeyCommand { get; }
@@ -612,6 +634,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         Raise(nameof(CanRunNode));
         Raise(nameof(PathsOk));
+        Raise(nameof(HasEnvironmentProblem));
+        Raise(nameof(PathsHint));
         Raise(nameof(NodeOriginText));
         Raise(nameof(ApiOriginText));
         Raise(nameof(RuntimeSummary));
@@ -624,10 +648,95 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public bool PathsOk => CanRunNode;
 
-    public string PathsHint => CanRunNode
-        ? RuntimeSummary
-        : "没找到可用的 node.exe 或 workbuddy_api。到「设置」标签页点「自动探测」；"
-          + "发布包自带的在 runtime\\ 子目录下，别把它删了。";
+    /// <summary>
+    /// 环境体检：把「能不能跑」拆成几条独立的检查，逐条说清楚。
+    ///
+    /// 为什么要拆：以前只有一句“没找到 node.exe 或 workbuddy_api”，
+    /// 用户根本判断不了是「没装」还是「被删了」还是「路径填错了」。
+    /// 而发布包本该是自带运行时的 —— 所以“自带那份不见了”和“系统也没装”
+    /// 是两种完全不同的情况，提示也应该不一样。
+    /// </summary>
+    /// <summary>
+    /// 环境体检结果。**是属性不是方法** —— WPF 的绑定只能绑属性，
+    /// 绑到方法上不会报错，只是永远拿不到值（列表永远是空的）。
+    /// </summary>
+    public ObservableCollection<EnvironmentCheckVm> EnvironmentChecks { get; } = [];
+
+    /// <summary>重新跑一遍体检，把结果填进 EnvironmentChecks。</summary>
+    public void RefreshEnvironment()
+    {
+        var checks = new List<EnvironmentCheckVm>();
+
+        // ① .NET：能跑到这里就说明运行时没问题（自包含发布）
+        checks.Add(new EnvironmentCheckVm(".NET 运行时", true,
+            $"已加载 {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}"));
+
+        // ② 自带的便携版 Node
+        var bundledNode = ProcessLocator.BundledNodePath;
+        checks.Add(new EnvironmentCheckVm("自带的 Node.js", File.Exists(bundledNode),
+            File.Exists(bundledNode)
+                ? bundledNode
+                : $"不在 {bundledNode}（如果这个包本该自带，说明文件被删了）"));
+
+        // ③ 自带的 workbuddy_api
+        var bundledApi = ProcessLocator.BundledApiDirectory;
+        var bundledApiOk = File.Exists(Path.Combine(bundledApi, "src", "bin.js"));
+        checks.Add(new EnvironmentCheckVm("自带的 workbuddy_api", bundledApiOk,
+            bundledApiOk ? bundledApi : $"不在 {bundledApi}"));
+
+        // ④ 实际会用的 node
+        checks.Add(new EnvironmentCheckVm("实际使用的 node.exe", CanRunNode && !string.IsNullOrEmpty(NodePath),
+            string.IsNullOrEmpty(NodePath) ? "没找到（自带的和系统装的都没有）" : $"{NodePath}（{NodeOriginText}）"));
+
+        // ⑤ 实际会用的 workbuddy_api
+        checks.Add(new EnvironmentCheckVm("实际使用的 workbuddy_api", CanRunNode && !string.IsNullOrEmpty(ApiDirectory),
+            string.IsNullOrEmpty(ApiDirectory) ? "没找到" : $"{ApiDirectory}（{ApiOriginText}）"));
+
+        EnvironmentChecks.Clear();
+        foreach (var check in checks) EnvironmentChecks.Add(check);
+
+        Raise(nameof(HasEnvironmentProblem));
+        Raise(nameof(PathsHint));
+    }
+
+    /// <summary>体检结果里“缺了什么”，给首页那张警告卡用。</summary>
+    public bool HasEnvironmentProblem => !CanRunNode;
+
+    public string PathsHint
+    {
+        get
+        {
+            if (CanRunNode) return RuntimeSummary;
+
+            var missing = new List<string>();
+            if (string.IsNullOrEmpty(NodePath)) missing.Add("Node.js");
+            if (string.IsNullOrEmpty(ApiDirectory) ||
+                !File.Exists(CliRunner.DescribeApiDirectory(ApiDirectory))) missing.Add("workbuddy_api");
+
+            var text = $"缺 {string.Join(" 和 ", missing)}。";
+
+            // 自带的那份在不在，决定该怎么办，得说清楚
+            var bundledNodeOk = File.Exists(ProcessLocator.BundledNodePath);
+            var bundledApiOk = File.Exists(Path.Combine(ProcessLocator.BundledApiDirectory, "src", "bin.js"));
+
+            if (bundledNodeOk || bundledApiOk)
+            {
+                text += "自带的运行时还在，点「自动探测」应该能找回来。";
+            }
+            else if (Directory.Exists(ProcessLocator.RuntimeRoot))
+            {
+                text += "runtime 目录下没有可用的文件 —— 可能是被删了或被杀软拦了。"
+                     + "重新解压一次发布包，或者在「设置」里手动指定。";
+            }
+            else
+            {
+                text += "这个发布包里没有 runtime 目录，需要自己装 Node.js 20.10+（https://nodejs.org/），"
+                     + "或者在「设置」里指定已有的 node.exe。";
+            }
+
+            return text;
+        }
+    }
 
     private void OnPropertyChanged(string name) => Raise(name);
 
@@ -638,6 +747,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public async Task InitializeAsync()
     {
+        // 第一件事就是体检：这样即使后面因为路径没找到提前 return，
+        // 用户也能在首页看到到底是缺 Node 还是缺 workbuddy_api。
+        await Task.Run(RefreshEnvironment);
+
         AppendLog($"配置文件：{AppSettings.Location}");
         if (AppSettings.LastLoadError is { Length: > 0 } loadError)
         {
@@ -707,6 +820,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         // 探测结果直接落盘，下次启动不用再找一遍
         SaveSettings();
+
+        RefreshEnvironment();
     }
 
     private void SaveSettings()

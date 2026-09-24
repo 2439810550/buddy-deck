@@ -13,11 +13,16 @@
         powershell -ExecutionPolicy Bypass -File build.ps1
         powershell -ExecutionPolicy Bypass -File build.ps1 -NodeVersion 24.14.0
         powershell -ExecutionPolicy Bypass -File build.ps1 -SkipNode   # 只出来 exe
+        powershell -ExecutionPolicy Bypass -File build.ps1 -Output publish.next  # 换个输出目录
 #>
 [CmdletBinding()]
 param(
     [string]$NodeVersion = "22.23.3",
-    [switch]$SkipNode
+    [switch]$SkipNode,
+    # 输出目录。默认 publish。
+    # 想打到别处就传 -Output publish.next —— 正在运行的实例会锁住 publish\，
+    # 这时候不用去杀进程，换个目录就行。
+    [string]$Output = "publish"
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,7 +30,7 @@ $ErrorActionPreference = "Stop"
 $root      = $PSScriptRoot
 $parent    = Split-Path $root -Parent
 $cache     = Join-Path $parent ".cache"
-$publish   = Join-Path $root "publish"
+$publish   = Join-Path $root $Output
 $runtime   = Join-Path $publish "runtime"
 $apiSource = Join-Path $parent "workbuddy_api"
 $csproj    = Join-Path $root "WorkBuddyPanel.csproj"
@@ -35,8 +40,18 @@ function Fail($text) { Write-Host "!!! $text" -ForegroundColor Red; exit 1 }
 
 if (-not (Test-Path $csproj)) { Fail "找不到 $csproj" }
 
-Step "1/4  清理 publish"
-if (Test-Path $publish) { Remove-Item -Recurse -Force $publish }
+Step "1/4  清理 $Output"
+if (Test-Path $publish) {
+    try {
+        Remove-Item -Recurse -Force $publish -ErrorAction Stop
+    } catch {
+        # 十有八九是用户正在运行那个 exe，文件被锁。
+        # 这种情况不要反射性地去杀进程 —— 换个输出目录就行。
+        Write-Host "    删不掉（多半是有实例正在运行）" -ForegroundColor Yellow
+        Write-Host "    换个输出目录重试：-Output publish.next" -ForegroundColor Yellow
+        exit 1
+    }
+}
 
 Step "2/4  发布 WPF（自包含，用户不需要装 .NET）"
 & dotnet publish $csproj -c Release -r win-x64 --self-contained true `
@@ -60,9 +75,13 @@ if ($SkipNode) {
             $url = "https://nodejs.org/dist/v$NodeVersion/$zipName"
             Write-Host "    下载 $url"
             try {
-                Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+                # 用 curl 而不是 Invoke-WebRequest ——
+                # PowerShell 5.1 的 Invoke-WebRequest 会渲染进度条，实测把 34MB 拖到几分钟，
+                # curl 只要十来秒。curl.exe 从 Windows 10 1803 起就自带了。
+                & curl.exe -sS -L --fail --max-time 900 -o $zipPath $url
+                if ($LASTEXITCODE -ne 0) { throw "curl 退出码 $LASTEXITCODE" }
             } catch {
-                Fail "下载 Node 失败：$($_.Exception.Message)`n    可以自己下好放进 .cache\，或者用 -SkipNode 只出 exe。"
+                Fail "下载 Node 失败：$($_.Exception.Message)`n    可以自己下好放进 $cache\，或者用 -SkipNode 只出 exe。"
             }
         }
         Write-Host "    解压到 $cache"
