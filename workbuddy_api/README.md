@@ -542,6 +542,15 @@ WORKBUDDY_ELECTRON_BIN="D:\sqsoftware\workbuddy\WorkBuddy.exe" node src/bin.js d
 - [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api)（MIT）— WorkBuddy 上游协议的参照实现。
 - [corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect)（MIT）— 本项目的认证与上游协议提取自该 DSH 插件的同一条链路。
 
+## 这个子项目后来被用在哪
+
+[BuddyDeck](https://github.com/2439810550/buddy-deck) 把本网关当作地基，
+在上面加了 Anthropic Messages / OpenAI Responses 两个协议适配、
+多账号保险库、每日签到、滑动窗口续期、跨机加密搬运，
+以及一个 Windows 桌面端（托盘、一键接客户端、计划任务）。
+
+本目录的代码**不因被引用而改变归属**；引用请保留 [znahovo](https://github.com/znahovo) 的署名。
+
 ## 许可证
 
 [MIT](./LICENSE)

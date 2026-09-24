@@ -27,11 +27,12 @@ pi          ─┘
 
 ## 三块东西
 
-| 目录 | 是什么 | 在本仓库里？ |
+| 目录 | 是什么 | 谁写的 |
 |---|---|---|
-| **`WorkBuddyPanel/`** | Windows 桌面端（C# / WPF）。界面、托盘、账号管理、一键接客户端、每日维护。零第三方依赖 | ✅ |
-| **`workbuddy_api/`** | 网关本体（Node.js）。认证、上游协议、协议翻译。零第三方依赖 | ✅ |
-| **`dsh-workbuddy-connect/`** | DeepSeek Harness 的插件（上游参照实现） | ❌ 别人的仓库，见下方链接 |
+| **`WorkBuddyPanel/`** | Windows 桌面端（C# / WPF）。界面、托盘、账号管理、一键接客户端、每日维护 | 本项目作者 |
+| **`workbuddy_api/`** | 网关本体（Node.js）。认证、上游协议、协议翻译 | **[znahovo](https://github.com/znahovo)**（本项目作者只做了扩展，见致谢） |
+
+> 两个子项目都是**零第三方依赖**：网关只用 Node 内置模块，桌面端只用 WPF + WinForms 托盘控件 + BCL。
 
 分工：`WorkBuddyPanel` 管界面和生命周期，`workbuddy_api` 管协议和凭据。
 面板不重写任何协议 —— 它只是把网关拉起来、读写配置文件、把状态显示出来。
@@ -165,13 +166,38 @@ buddy-deck/
 
 ## 致谢
 
-- **`workbuddy_api/`** —— 由**我的朋友**独立实现。
-  它把 WorkBuddy 桌面 App 的登录态接出来、变成标准的 OpenAI 接口，
-  并处理了协议层的所有坑（加密凭据解密、token 刷新、上游 UA 构形、流式强制）。
-  本项目的多账号、签到、滑动窗口续期、跨机搬运和三个协议适配，都建在这份工作之上。
-  他的名字/主页：**（待补）**
+### 本项目的基础：[znahovo](https://github.com/znahovo) 的 `workbuddy_api`
+
+**`workbuddy_api/` 这个子项目不是我写的，是 [znahovo](https://github.com/znahovo) 写的。**
+我把它原样放进本仓库作为整个项目的地基，然后在他之上做了扩展。
+
+他解决的是**最难的那一层**，也是没有它就什么都做不了的一层：
+
+- 把 WorkBuddy 桌面 App 的登录态从本地凭据文件里接出来
+- WorkBuddy 5.6+ 的加密凭据解密（用 App 自身二进制取 at-rest 密钥，内存中 AES-256-GCM）
+- accessToken / refreshToken 的自动刷新与单飞并发控制
+- 上游私有协议：UA 构形、请求头、强制流式、目录与计费端点
+- 把这一切包成一个 OpenAI 兼容的本地网关
+
+**我在他上面的扩展**（写清楚界限，免得混淆）：
+
+| 我加的 | 在哪 |
+|---|---|
+| Anthropic Messages 协议适配（给 Claude Code） | `src/anthropic.js` |
+| OpenAI Responses 协议适配（给 Codex） | `src/responses.js` |
+| 三协议共用的模型别名解析等 | `src/protocol.js` |
+| 多账号保险库与运行时切换 | `src/accounts.js` |
+| 每日签到（接口从客户端产物里提取） | `src/checkin.js` |
+| 滑动窗口续期 + 跨机加密搬运 | `src/transfer.js` / `renewIfStale` |
+| 整个 Windows 桌面端 | `WorkBuddyPanel/` |
+| 命令行命令、文档 | `src/bin.js` / `docs/` |
+
+如果你要引用本项目里的网关代码，**请一并保留他的署名**。
+
+### 更早的参照实现
+
 - [corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect)（MIT）
-  —— 认证链路与上游协议的**参照实现**，`workbuddy_api` 的协议细节大量来自它。
+  —— 认证链路与上游协议的**参照实现**，`workbuddy_api` 的协议细节大量参考自它。
 - [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api)（MIT）
   —— WorkBuddy 上游协议的更早参照。
 
