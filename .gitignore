@@ -46,8 +46,5 @@ _t/
 # 安装包产物
 dist/
 
-# BuddyDeckHub
-BuddyDeckHub/bin/
-BuddyDeckHub/obj/
-BuddyDeckHub/.testdata/
-BuddyDeckHub/hub.log
+# BuddyDeckHub 不进这个仓库（含管理密钥等敏感文件）
+BuddyDeckHub/
