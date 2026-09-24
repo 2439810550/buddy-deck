@@ -45,3 +45,9 @@ _t/
 
 # 安装包产物
 dist/
+
+# BuddyDeckHub
+BuddyDeckHub/bin/
+BuddyDeckHub/obj/
+BuddyDeckHub/.testdata/
+BuddyDeckHub/hub.log
