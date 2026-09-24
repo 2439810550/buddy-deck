@@ -619,8 +619,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public AsyncRelayCommand AutoDetectAllCommand { get; }
 
     // ── 派生状态 ───────────────────────────────────────────────
-    public bool CanRunNode => !string.IsNullOrEmpty(NodePath) && !string.IsNullOrEmpty(ApiDirectory)
-                              && File.Exists(CliRunner.DescribeApiDirectory(ApiDirectory));
+    //
+    // 设置页里那两格允许填相对路径（发布版的默认值就是 .\runtime\node.exe），
+    // 但**真正去用**的时候必须是绝对路径：
+    //   · GatewayRunner 会把工作目录设成 workbuddy_api 目录，此时相对的
+    //     ".\runtime\node.exe" 会被解析到 workbuddy_api\runtime\node.exe —— 找不到；
+    //   · CliRunner 的 FileName 同理。
+    // 所以统一在这里展开一次，界面上仍然显示用户填的那个（相对）样子。
+
+    /// <summary>实际启动进程用的 node.exe 绝对路径。</summary>
+    private string? ResolvedNodePath => ProcessLocator.MakeAbsolute(NodePath);
+
+    /// <summary>实际启动进程用的 workbuddy_api 绝对目录。</summary>
+    private string? ResolvedApiDirectory => ProcessLocator.MakeAbsolute(ApiDirectory);
+
+    public bool CanRunNode =>
+        ResolvedNodePath is { } node && File.Exists(node) &&
+        ResolvedApiDirectory is { } api && File.Exists(CliRunner.DescribeApiDirectory(api));
 
     /// <summary>当前用的 node.exe 是从哪来的。</summary>
     public string NodeOriginText => ProcessLocator.NodeOrigin(NodePath).Describe();
@@ -629,6 +644,32 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public string ApiOriginText => ProcessLocator.ApiOrigin(ApiDirectory).Describe();
 
     public string RuntimeSummary => $"Node.js 来源：{NodeOriginText}　·　workbuddy_api 来源：{ApiOriginText}";
+
+    /// <summary>
+    /// 界面上显示一个路径：填的是相对路径就补上「→ 实际指向哪里」，
+    /// 否则光看 .\runtime\node.exe 判断不出它落在哪个盘。
+    /// </summary>
+    private static string DescribePath(string configured)
+    {
+        if (!ProcessLocator.IsRelative(configured)) return configured;
+        var resolved = ProcessLocator.MakeAbsolute(configured);
+        return resolved is null ? configured : $"{configured} → {resolved}";
+    }
+
+    /// <summary>设置页里那两格路径的说明（发布版给的是默认值）。</summary>
+    public string RuntimeDefaultsHint
+    {
+        get
+        {
+            if (!AppSettings.IsReleaseBuild)
+            {
+                return "调试版：路径留空即可，程序会自己去系统里找 Node.js，并从 exe 所在目录向上找 workbuddy_api 仓库。";
+            }
+
+            return $"发布版默认：{AppSettings.DefaultNodePathRelative} 和 {AppSettings.DefaultApiDirectoryRelative}"
+                 + "（相对 exe 所在目录）。发布包里自带这两样，一般不用改。";
+        }
+    }
 
     private void RaiseDerived()
     {
@@ -685,12 +726,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             bundledApiOk ? bundledApi : $"不在 {bundledApi}"));
 
         // ④ 实际会用的 node
+        //    这里报**展开后**的绝对路径：发布版默认填的是 .\runtime\node.exe，
+        //    只显示相对路径的话，用户没法确认它到底指向哪里。
         checks.Add(new EnvironmentCheckVm("实际使用的 node.exe", CanRunNode && !string.IsNullOrEmpty(NodePath),
-            string.IsNullOrEmpty(NodePath) ? "没找到（自带的和系统装的都没有）" : $"{NodePath}（{NodeOriginText}）"));
+            string.IsNullOrEmpty(NodePath) ? "没找到（自带的和系统装的都没有）" : $"{DescribePath(NodePath)}（{NodeOriginText}）"));
 
         // ⑤ 实际会用的 workbuddy_api
         checks.Add(new EnvironmentCheckVm("实际使用的 workbuddy_api", CanRunNode && !string.IsNullOrEmpty(ApiDirectory),
-            string.IsNullOrEmpty(ApiDirectory) ? "没找到" : $"{ApiDirectory}（{ApiOriginText}）"));
+            string.IsNullOrEmpty(ApiDirectory) ? "没找到" : $"{DescribePath(ApiDirectory)}（{ApiOriginText}）"));
 
         EnvironmentChecks.Clear();
         foreach (var check in checks) EnvironmentChecks.Add(check);
@@ -709,9 +752,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             if (CanRunNode) return RuntimeSummary;
 
             var missing = new List<string>();
-            if (string.IsNullOrEmpty(NodePath)) missing.Add("Node.js");
-            if (string.IsNullOrEmpty(ApiDirectory) ||
-                !File.Exists(CliRunner.DescribeApiDirectory(ApiDirectory))) missing.Add("workbuddy_api");
+            if (string.IsNullOrEmpty(NodePath) || ResolvedNodePath is not { } node || !File.Exists(node))
+                missing.Add("Node.js");
+            if (string.IsNullOrEmpty(ApiDirectory) || ResolvedApiDirectory is not { } api ||
+                !File.Exists(CliRunner.DescribeApiDirectory(api)))
+                missing.Add("workbuddy_api");
 
             var text = $"缺 {string.Join(" 和 ", missing)}。";
 
@@ -844,9 +889,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Port = "8787";
         ApiKey = "sk-workbuddy-local";
         AuthFile = "";
-        // 路径不恢复 —— 那个是自动探测出来的，清掉反而让程序找不到 node
+
+        // 路径：发布版恢复到自带的 runtime（那才是"默认值"），调试版保持不动 ——
+        // 调试时那份路径是自动探测出来的，清掉反而让程序找不到 node
+        if (AppSettings.IsReleaseBuild)
+        {
+            NodePath = AppSettings.DefaultNodePathRelative;
+            ApiDirectory = AppSettings.DefaultApiDirectoryRelative;
+        }
+
         SaveSettings();
-        FlashStatus("已恢复默认（端口 / 密钥 / 登录文件路径）");
+        FlashStatus(AppSettings.IsReleaseBuild
+            ? "已恢复默认（端口 / 密钥 / 登录文件路径 / 运行环境路径）"
+            : "已恢复默认（端口 / 密钥 / 登录文件路径）");
     }
 
     private void CopyToClipboard(string value, string what)
@@ -905,13 +960,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ClearLogInternal();
         AppendLog($"正在启动网关（{ProviderLabel}，端口 {port}）…");
 
+        // 传绝对路径给进程：GatewayRunner 会把工作目录切到 workbuddy_api 目录，
+        // 相对的 ".\runtime\node.exe" 在那种工作目录下是找不到的
+        var nodeExe = ResolvedNodePath ?? NodePath;
+        var apiDir = ResolvedApiDirectory ?? ApiDirectory;
+
         IsBusy = true;
         BusyText = "正在启动网关…";
         try
         {
             await _gateway.StartAsync(new GatewayOptions(
-                NodePath,
-                ApiDirectory,
+                nodeExe,
+                apiDir,
                 port,
                 ApiKey,
                 Provider,
@@ -1000,13 +1060,27 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private string ProviderArgs()
         => Provider == "workbuddy-ai" ? " --provider workbuddy-ai" : "";
 
+    /// <summary>
+    /// 跑一条 `node src/bin.js ...` 命令。
+    ///
+    /// 所有 CLI 调用都走这里，为的是统一把相对路径（.\runtime\...）展开成绝对路径 ——
+    /// 漏掉任何一处，发布版默认路径就会在那边悄悄失效。
+    /// </summary>
+    private Task<CliResult> RunCliAsync(string arguments, string? stdin = null, CancellationToken ct = default)
+        => CliRunner.RunAsync(
+            ResolvedNodePath ?? NodePath,
+            ResolvedApiDirectory ?? ApiDirectory,
+            arguments,
+            stdin,
+            ct);
+
     private async Task RefreshStatusAsync()
     {
         IsBusy = true;
         BusyText = "正在读取账号信息…";
         try
         {
-            var result = await CliRunner.RunAsync(NodePath, ApiDirectory, $"src/bin.js status --json{ProviderArgs()}");
+            var result = await RunCliAsync($"src/bin.js status --json{ProviderArgs()}");
             var json = CliRunner.ExtractJson(result.StdOut);
             if (json is null)
             {
@@ -1067,7 +1141,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         BusyText = "正在刷新模型列表…";
         try
         {
-            var result = await CliRunner.RunAsync(NodePath, ApiDirectory, $"src/bin.js models --json{ProviderArgs()}");
+            var result = await RunCliAsync($"src/bin.js models --json{ProviderArgs()}");
             var json = CliRunner.ExtractJson(result.StdOut);
             if (json is null)
             {
@@ -1116,7 +1190,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         BusyText = "正在体检…";
         try
         {
-            var result = await CliRunner.RunAsync(NodePath, ApiDirectory, $"src/bin.js doctor{ProviderArgs()}");
+            var result = await RunCliAsync($"src/bin.js doctor{ProviderArgs()}");
             AppendLog("===== doctor =====");
             foreach (var line in result.Combined.Split('\n'))
                 AppendLog(line.TrimEnd());

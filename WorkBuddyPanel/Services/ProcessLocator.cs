@@ -40,6 +40,38 @@ public static class ProcessLocator
 
     public static string BundledApiDirectory => Path.Combine(RuntimeRoot, "workbuddy_api");
 
+    /// <summary>
+    /// 把相对路径按 **exe 所在目录** 展开成绝对路径。
+    ///
+    /// 为什么不能靠进程的当前目录：--maintain 是计划任务拉起来的，当前目录可能是
+    /// System32；快捷方式也可以把「起始位置」改成别的。而这些路径是相对发布包说的，
+    /// 唯一正确的基准就是 exe 自己待的那个目录。
+    /// 绝对路径原样返回，空值返回 null。
+    /// </summary>
+    public static string? MakeAbsolute(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+
+        var trimmed = path.Trim();
+        try
+        {
+            // 已经是绝对路径（含 "C:\..." 和 UNC）就原样用，别再规范化 ——
+            // 用户自己填的路径显示成什么样就保持什么样
+            return Path.IsPathRooted(trimmed)
+                ? trimmed
+                : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, trimmed));
+        }
+        catch
+        {
+            // 路径里有非法字符：交给下游按「找不到」处理，别在这里抛
+            return trimmed;
+        }
+    }
+
+    /// <summary>这个路径是不是「相对 exe 目录」写的（界面上要提示一句）。</summary>
+    public static bool IsRelative(string? path)
+        => !string.IsNullOrWhiteSpace(path) && !Path.IsPathRooted(path.Trim());
+
     /// <summary>在 PATH 里逐个目录找可执行文件。</summary>
     public static string? Which(string exeName)
     {
@@ -66,11 +98,13 @@ public static class ProcessLocator
 
     /// <summary>
     /// 定位 node.exe。hint 是用户手填的路径，只有真的存在才会采用。
+    /// hint 允许是相对路径（发布版的默认值就是 .\runtime\node.exe），按 exe 目录展开。
     /// </summary>
     public static string? FindNode(string? hint = null)
     {
-        // 1) 用户手填的
-        if (!string.IsNullOrWhiteSpace(hint) && File.Exists(hint)) return hint;
+        // 1) 用户手填的（也可能是发布版的默认值）
+        var hinted = MakeAbsolute(hint);
+        if (hinted is not null && File.Exists(hinted)) return hinted;
 
         // 2) 发布包自带的便携版 —— 用户没装 Node 也能跑，靠的就是这一条
         var bundled = BundledNodePath;
@@ -106,10 +140,12 @@ public static class ProcessLocator
     /// </summary>
     public static string? FindApiDirectory(string? hint = null)
     {
-        // 1) 用户手填的（允许填仓库根、bin.js 所在目录、或 src 的上层）
-        if (!string.IsNullOrWhiteSpace(hint))
+        // 1) 用户手填的（允许填仓库根、bin.js 所在目录、或 src 的上层；
+        //    也允许相对路径 —— 发布版的默认值就是 .\runtime\workbuddy_api）
+        var hinted = MakeAbsolute(hint);
+        if (hinted is not null)
         {
-            var trimmed = hint.TrimEnd('\\', '/');
+            var trimmed = hinted.TrimEnd('\\', '/');
             if (LooksLikeApiDir(trimmed)) return trimmed;
             var parent = Path.GetDirectoryName(trimmed);
             if (LooksLikeApiDir(parent)) return parent;
@@ -158,19 +194,25 @@ public static class ProcessLocator
     /// <summary>这个 node 路径是哪来的。</summary>
     public static PathOrigin NodeOrigin(string? nodePath)
     {
-        if (string.IsNullOrWhiteSpace(nodePath) || !File.Exists(nodePath)) return PathOrigin.Missing;
+        // 先展开：发布版的默认值是 .\runtime\node.exe，不展开就跟自带的绝对路径比不上，
+        // 会被误报成「系统安装」
+        var resolved = MakeAbsolute(nodePath);
+        if (resolved is null || !File.Exists(resolved)) return PathOrigin.Missing;
 
-        if (IsSameFile(nodePath, BundledNodePath)) return PathOrigin.Bundled;
-        if (!string.IsNullOrWhiteSpace(_manualNodeHint) && IsSameFile(nodePath, _manualNodeHint)) return PathOrigin.Manual;
+        if (IsSameFile(resolved, BundledNodePath)) return PathOrigin.Bundled;
+        if (!string.IsNullOrWhiteSpace(_manualNodeHint) && IsSameFile(resolved, MakeAbsolute(_manualNodeHint)))
+            return PathOrigin.Manual;
         return PathOrigin.System;
     }
 
     public static PathOrigin ApiOrigin(string? apiDirectory)
     {
-        if (string.IsNullOrWhiteSpace(apiDirectory) || !LooksLikeApiDir(apiDirectory)) return PathOrigin.Missing;
+        var resolved = MakeAbsolute(apiDirectory);
+        if (resolved is null || !LooksLikeApiDir(resolved)) return PathOrigin.Missing;
 
-        if (IsSameFile(apiDirectory, BundledApiDirectory)) return PathOrigin.Bundled;
-        if (!string.IsNullOrWhiteSpace(_manualApiHint) && IsSameFile(apiDirectory, _manualApiHint)) return PathOrigin.Manual;
+        if (IsSameFile(resolved, BundledApiDirectory)) return PathOrigin.Bundled;
+        if (!string.IsNullOrWhiteSpace(_manualApiHint) && IsSameFile(resolved, MakeAbsolute(_manualApiHint)))
+            return PathOrigin.Manual;
         return PathOrigin.System;
     }
 
@@ -186,8 +228,10 @@ public static class ProcessLocator
         return (FindNode(nodeHint), FindApiDirectory(apiHint));
     }
 
-    private static bool IsSameFile(string a, string b)
+    private static bool IsSameFile(string? a, string? b)
     {
+        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b)) return false;
+
         try
         {
             return string.Equals(

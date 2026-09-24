@@ -905,6 +905,8 @@
                                 </StackPanel>
                                 <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
                                     <Run Text="不知道填什么就点「自动探测」。探测不到再手动选。" />
+                                    <LineBreak />
+                                    <Run Text="{Binding RuntimeDefaultsHint, Mode=OneWay}" />
                                 </TextBlock>
 
                                 <TextBlock Text="node.exe（Node.js 主程序）" Style="{StaticResource Field}" />
@@ -947,7 +949,9 @@
                                 <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
                                     <Run Text="发布包里自带一份 Node.js 和一份 workbuddy_api，放在 exe 旁边的 runtime 子目录。" />
                                     <LineBreak />
-                                    <Run Text="有它们就不需要自己装 Node；把 runtime 删了才会去用系统装的。" />
+                                    <Run Text="发布版默认就填这两个相对路径（.\runtime\node.exe / .\runtime\workbuddy_api），" />
+                                    <LineBreak />
+                                    <Run Text="所以不需要自己装 Node；把这两个框清空，程序才会去系统里找。" />
                                 </TextBlock>
                             </StackPanel>
                         </Border>

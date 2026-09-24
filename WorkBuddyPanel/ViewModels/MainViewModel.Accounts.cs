@@ -937,7 +937,7 @@ public sealed partial class MainViewModel
         {
             var args = $"src/bin.js accounts add{ProviderArgs()}";
             if (!string.IsNullOrWhiteSpace(label)) args += $" --label \"{label.Trim()}\"";
-            var result = await CliRunner.RunAsync(NodePath, ApiDirectory, args);
+            var result = await RunCliAsync(args);
             AccountsResult = result.Combined;
             AppendLog("[账号] " + result.Combined);
             if (result.Ok) FlashStatus("账号已导入"); else SetStatus("导入失败，看「日志」标签页");
@@ -1052,7 +1052,7 @@ public sealed partial class MainViewModel
         BusyText = "正在执行…";
         try
         {
-            var result = await CliRunner.RunAsync(NodePath, ApiDirectory, args);
+            var result = await RunCliAsync(args);
             AccountsResult = result.Combined;
             AppendLog("[账号] " + result.Combined);
             if (result.Ok) FlashStatus(successNote); else SetStatus("操作失败，看「日志」标签页");

@@ -36,6 +36,61 @@ public sealed class AppSettings
     /// </summary>
     public bool AutoStartWithWindows { get; set; }
 
+    // ── 发布版的默认运行环境 ───────────────────────────────────
+    //
+    // 发布包的结构是固定的：exe 旁边一个 runtime 子目录，里面装着
+    // node.exe 和一份 workbuddy_api。所以发布版根本不需要「自动探测」——
+    // 默认值就写死成那两个相对路径，用户开箱即用。
+    //
+    // 相对路径是相对 **exe 所在目录**（不是进程的当前目录）—— 计划任务
+    // 拉起 --maintain 时当前目录可能是 System32。展开在 ProcessLocator 里做。
+    //
+    // 调试版不设默认值：开发时那份运行时不在 exe 旁边，硬塞一个不存在的
+    // 路径只会让「自动探测」和体检报告都变糊涂。
+
+    /// <summary>发布版默认的 node.exe（相对 exe 所在目录）。</summary>
+    public const string DefaultNodePathRelative = @".\runtime\node.exe";
+
+    /// <summary>发布版默认的 workbuddy_api 目录（相对 exe 所在目录）。</summary>
+    public const string DefaultApiDirectoryRelative = @".\runtime\workbuddy_api";
+
+#if DEBUG
+    private const bool BuiltAsRelease = false;
+#else
+    private const bool BuiltAsRelease = true;
+#endif
+
+    /// <summary>
+    /// 当前这个 exe 是不是发布版（Release）编出来的。
+    ///
+    /// 值在编译期就定死了（publish 默认走 Release，比运行时反射可靠），
+    /// 但**故意是 static readonly 而不是 const**：const 会被折进调用点，
+    /// 于是调试版里 `if (IsReleaseBuild)` 的另一半就成了"检测到无法访问的代码"
+    /// （CS0162），每个用到它的地方都刷一条警告。static readonly 只是普通字段，
+    /// JIT 照样能把它当常量优化掉。
+    /// </summary>
+    public static readonly bool IsReleaseBuild = BuiltAsRelease;
+
+    /// <summary>发布版默认的 node.exe；调试版返回 null（不设默认值）。</summary>
+    public static string? DefaultNodePath => IsReleaseBuild ? DefaultNodePathRelative : null;
+
+    /// <summary>发布版默认的 workbuddy_api 目录；调试版返回 null。</summary>
+    public static string? DefaultApiDirectory => IsReleaseBuild ? DefaultApiDirectoryRelative : null;
+
+    /// <summary>
+    /// 把「用户没填」的位置补上发布版默认值。
+    /// 只填空位，绝不覆盖用户自己填过的东西。
+    /// </summary>
+    public void ApplyRuntimeDefaults()
+    {
+        // 用字段而不是 DefaultNodePath 属性：两者的值一样，但走属性的话
+        // 调试版里这一步会被折成"什么都不做"，可读性反而差
+        if (!IsReleaseBuild) return;
+
+        if (string.IsNullOrWhiteSpace(NodePath)) NodePath = DefaultNodePathRelative;
+        if (string.IsNullOrWhiteSpace(ApiDirectory)) ApiDirectory = DefaultApiDirectoryRelative;
+    }
+
     private static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WorkBuddyPanel");
 
@@ -70,7 +125,7 @@ public sealed class AppSettings
 
         try
         {
-            if (!File.Exists(FilePath)) return new AppSettings();
+            if (!File.Exists(FilePath)) return WithRuntimeDefaults(new AppSettings());
 
             LastLoadFoundFile = true;
             var json = File.ReadAllText(FilePath);
@@ -79,7 +134,7 @@ public sealed class AppSettings
             {
                 if (string.IsNullOrWhiteSpace(loaded.ApiKey)) loaded.ApiKey = "sk-workbuddy-local";
                 if (loaded.Port is < 1 or > 65535) loaded.Port = 8787;
-                return loaded;
+                return WithRuntimeDefaults(loaded);
             }
 
             LastLoadError = "配置文件内容不是有效的设置对象";
@@ -103,7 +158,14 @@ public sealed class AppSettings
             // 备不了就算了，至少日志里能看见原因
         }
 
-        return new AppSettings();
+        return WithRuntimeDefaults(new AppSettings());
+    }
+
+    /// <summary>补上发布版的默认运行环境，再交给调用方。</summary>
+    private static AppSettings WithRuntimeDefaults(AppSettings settings)
+    {
+        settings.ApplyRuntimeDefaults();
+        return settings;
     }
 
     public void Save()
