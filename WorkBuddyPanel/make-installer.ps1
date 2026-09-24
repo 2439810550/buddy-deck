@@ -1,4 +1,4 @@
-﻿<#
+<#
     一键做出可以发给别人的安装包。
 
     做两步：
@@ -24,6 +24,15 @@ $root = $PSScriptRoot
 
 function Step($text) { Write-Host "==> $text" -ForegroundColor Cyan }
 function Fail($text) { Write-Host "!!! $text" -ForegroundColor Red; exit 1 }
+
+# 版本号统一在这里清洗一次：容忍手抖传进来的 v1.0.0，但拦下真正不合法的值。
+# 不清洗的话，产物会叫 BuddyDeck-Setup-v1.0.0.exe，而 workflow 里
+# upload-artifact / gh-release 找的是 BuddyDeck-Setup-*.exe —— 通配符能兜住，
+# 但安装程序里显示的版本会带个 v，Windows「应用和功能」里也不好看。
+$Version = $Version.Trim() -replace '^[vV]', ''
+if ($Version -notmatch '^\d+(\.\d+){1,3}') {
+    Fail "版本号不合法：'$Version'。用 1.0.0 这样的形式（不要带 v 前缀）。"
+}
 
 # ── 找 Inno Setup 的编译器 ─────────────────────────────────────
 function Find-Iscc {
@@ -62,11 +71,16 @@ Step "2/2  生成安装程序（LZMA2 压缩，约 1 分钟）"
 $iss = Join-Path $root "installer.iss"
 if (-not (Test-Path $iss)) { Fail "找不到 installer.iss" }
 
+# dist 是被 .gitignore 排除的，干净的检出（比如 CI）里根本没有这个目录。
+# ISCC 不会自己建 OutputDir，缺了会直接报错退出 —— 这里先建好。
+$dist = Join-Path $root "dist"
+New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
 # 版本号通过命令行覆盖，不用改文件
 & $iscc "/DAppVersion=$Version" $iss
 if ($LASTEXITCODE -ne 0) { Fail "ISCC 编译失败" }
 
-$out = Join-Path $root "dist\BuddyDeck-Setup-$Version.exe"
+$out = Join-Path $dist "BuddyDeck-Setup-$Version.exe"
 if (-not (Test-Path $out)) { Fail "编译报成功但找不到产物：$out" }
 
 $zip = [math]::Round((Get-Item $out).Length / 1MB, 1)
