@@ -24,6 +24,18 @@ public sealed class AppSettings
     /// <summary>程序启动时自动拉起网关。</summary>
     public bool AutoStartGateway { get; set; } = true;
 
+    /// <summary>账号页自动刷新积分。</summary>
+    public bool AccountsAutoRefresh { get; set; } = true;
+
+    /// <summary>
+    /// 开机自启的**上次已知状态**。
+    ///
+    /// 真实值在注册表里，但读注册表要 ~12ms，而这是在窗口出现之前 ——
+    /// 所以启动时先用这个缓存值把开关摆上，真实值等窗口显示后在后台校正。
+    /// 注册表仍然是唯一真相，这只是为了不拖慢启动。
+    /// </summary>
+    public bool AutoStartWithWindows { get; set; }
+
     private static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WorkBuddyPanel");
 

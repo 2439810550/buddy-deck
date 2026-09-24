@@ -30,3 +30,8 @@ dsh-workbuddy-connect/
 
 # 和 workbuddy_api/ 内容重复的压缩包
 workbuddy_api.zip
+
+# 本机 AI 助手的工作约定（本地笔记，不进仓库）
+AGENTS.md
+.pi-must-not-kill.md
+inv-final.json

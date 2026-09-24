@@ -27,7 +27,7 @@ public sealed class ClientRowVm : ObservableObject
         _detail = state.Detail;
 
         ConfigureCommand = new AsyncRelayCommand(ConfigureAsync, () => _detected, owner.ReportError);
-        RestoreCommand = new RelayCommand(Restore, () => CanRestore);
+        RestoreCommand = new AsyncRelayCommand(RestoreAsync, () => CanRestore, owner.ReportError);
     }
 
     public ClientKind Kind { get; }
@@ -36,7 +36,7 @@ public sealed class ClientRowVm : ObservableObject
     public string Hint { get; }
 
     public AsyncRelayCommand ConfigureCommand { get; }
-    public RelayCommand RestoreCommand { get; }
+    public AsyncRelayCommand RestoreCommand { get; }
 
     public string Detail
     {
@@ -89,9 +89,9 @@ public sealed class ClientRowVm : ObservableObject
         await _owner.ConfigureClientsAsync([this]);
     }
 
-    private void Restore()
+    private async Task RestoreAsync()
     {
-        _owner.RestoreClient(this);
+        await _owner.RestoreClientAsync(this);
     }
 
     /// <summary>外部改完状态后刷新这一行。</summary>
@@ -111,7 +111,7 @@ public sealed partial class MainViewModel
     public ObservableCollection<ClientRowVm> Clients { get; } = [];
 
     public AsyncRelayCommand ConfigureAllCommand { get; private set; } = null!;
-    public RelayCommand RestoreAllCommand { get; private set; } = null!;
+    public AsyncRelayCommand RestoreAllCommand { get; private set; } = null!;
     public RelayCommand RefreshClientsCommand { get; private set; } = null!;
     public RelayCommand OpenCcSwitchCommand { get; private set; } = null!;
 
@@ -160,15 +160,34 @@ public sealed partial class MainViewModel
     private void InitialiseClients()
     {
         ConfigureAllCommand = new AsyncRelayCommand(() => ConfigureClientsAsync(Clients.ToList()), null, ReportError);
-        RestoreAllCommand = new RelayCommand(RestoreAll, () => ClientIntegrator.HasAnyBackup());
-        RefreshClientsCommand = new RelayCommand(RefreshClients);
+        RestoreAllCommand = new AsyncRelayCommand(RestoreAllAsync, () => HasAnyBackup, ReportError);
+        RefreshClientsCommand = new RelayCommand(() => _ = RefreshClientsAsync(), () => CanRunNode);
         OpenCcSwitchCommand = new RelayCommand(OpenCcSwitch);
-        RefreshClients();
+        // 不在构造函数里探测：探测要读 4 个客户端的配置文件 + 查注册表，
+        // 放在构造里会让窗口晚一拍才出来。改由 InitializeAsync 在窗口显示后做。
     }
 
-    private void RefreshClients()
+    /// <summary>
+    /// 探测四个客户端。
+    ///
+    /// 探测过程是纯同步的文件 I/O + 注册表查询（实测几十毫秒），
+    /// 所以丢到后台线程跑，别卡住界面。
+    /// </summary>
+    private async Task RefreshClientsAsync()
     {
-        var states = ClientIntegrator.Inspect(CurrentEndpoint());
+        if (!CanRunNode) return;
+
+        var endpoint = CurrentEndpoint();
+        List<ClientState> states;
+        try
+        {
+            states = await Task.Run(() => ClientIntegrator.Inspect(endpoint).ToList());
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[接入] 探测客户端失败：{ex.Message}");
+            return;
+        }
 
         // 第一次进来直接建表，之后按 Kind 原地更新，避免整页闪一下
         if (Clients.Count != states.Count)
@@ -190,8 +209,37 @@ public sealed partial class MainViewModel
             IntegrateModel = Models.FirstOrDefault(model => model.Rate == "x0.00") ?? Models[0];
         }
 
+        // 备份扫描的结果缓存起来：WPF 会频繁调 CanExecute，
+        // 而扫目录是不该反复做的事。
+        RefreshBackupFlag();
+
         Raise(nameof(HasIntegrateResult));
         RestoreAllCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>扫一遍备份目录，把结果存进字段。只在真正做完动作后重算。</summary>
+    private void RefreshBackupFlag()
+    {
+        try
+        {
+            HasAnyBackup = ClientIntegrator.HasAnyBackup();
+        }
+        catch
+        {
+            HasAnyBackup = false;
+        }
+    }
+
+    private bool _hasAnyBackup;
+
+    /// <summary>有没有可还原的备份。缓存的，不在 CanExecute 里扫盘。</summary>
+    public bool HasAnyBackup
+    {
+        get => _hasAnyBackup;
+        private set
+        {
+            if (Set(ref _hasAnyBackup, value)) RestoreAllCommand?.RaiseCanExecuteChanged();
+        }
     }
 
     /// <summary>当前该让客户端指向哪里。网关没起时用配置里的端口拼一个，至少不会拼出空地址。</summary>
@@ -229,7 +277,7 @@ public sealed partial class MainViewModel
             if (!started)
             {
                 IntegrateResult = "网关没起来，先修好网关再配客户端（看「日志」标签页）。";
-                RefreshClients();
+                await RefreshClientsAsync();
                 return;
             }
         }
@@ -238,47 +286,57 @@ public sealed partial class MainViewModel
         var specs = Models.Select(model => model.ToSpec()).ToList();
         var lines = new List<string> { $"网关地址：{endpoint.BaseUrl}　　模型：{endpoint.Model}" };
 
-        foreach (var row in targets)
+        // 写配置是同步的文件 I/O（还要备份、读注册表），丢后台线程做，
+        // 别让界面在“正在配置 4 个客户端”的几百毫秒里僵住。
+        await Task.Run(() =>
         {
-            try
+            foreach (var row in targets)
             {
-                lines.Add("✓ " + ClientIntegrator.Configure(row.Kind, endpoint, specs));
+                try
+                {
+                    lines.Add("✓ " + ClientIntegrator.Configure(row.Kind, endpoint, specs));
+                }
+                catch (Exception ex)
+                {
+                    lines.Add($"✗ {row.Name} 配置失败：{ex.Message}");
+                    AppendLog($"[接入] {row.Name} 失败：{ex}");
+                }
             }
-            catch (Exception ex)
-            {
-                lines.Add($"✗ {row.Name} 配置失败：{ex.Message}");
-                AppendLog($"[接入] {row.Name} 失败：{ex}");
-            }
-        }
+        });
 
         lines.Add("");
         lines.Add("备份在 " + ClientIntegrator.BackupRoot);
         IntegrateResult = string.Join("\n", lines);
 
         foreach (var line in lines) AppendLog("[接入] " + line);
-        RefreshClients();
+        await RefreshClientsAsync();
         StatusDetail = $"已配置 {targets.Count} 个客户端";
     }
 
-    internal void RestoreClient(ClientRowVm row)
+    internal async Task RestoreClientAsync(ClientRowVm row)
     {
-        var message = ClientIntegrator.Restore(row.Kind);
+        var message = await Task.Run(() => ClientIntegrator.Restore(row.Kind));
         IntegrateResult = message;
         AppendLog("[接入] " + message);
-        RefreshClients();
-        StatusDetail = message;
+        await RefreshClientsAsync();
+        FlashStatus(message);
     }
 
-    private void RestoreAll()
+    private async Task RestoreAllAsync()
     {
         var messages = new List<string>();
-        foreach (var kind in new[] { ClientKind.ClaudeCode, ClientKind.Codex, ClientKind.Pi })
-            messages.Add(ClientIntegrator.Restore(kind));
+
+        // 还原是同步的文件拷贝，丢后台线程做
+        await Task.Run(() =>
+        {
+            foreach (var kind in new[] { ClientKind.ClaudeCode, ClientKind.Codex, ClientKind.Pi })
+                messages.Add(ClientIntegrator.Restore(kind));
+        });
 
         IntegrateResult = string.Join("\n", messages);
         foreach (var message in messages) AppendLog("[接入] " + message);
-        RefreshClients();
-        StatusDetail = "已还原所有客户端配置";
+        await RefreshClientsAsync();
+        FlashStatus("已还原所有客户端配置");
     }
 
     private void OpenCcSwitch()
@@ -297,7 +355,7 @@ public sealed partial class MainViewModel
         try
         {
             Process.Start(new ProcessStartInfo { FileName = exe, UseShellExecute = true });
-            StatusDetail = "已启动 CC Switch";
+            FlashStatus("已启动 CC Switch");
         }
         catch (Exception ex)
         {

@@ -65,6 +65,8 @@ function printHelp() {
       "  logout   Remove this tool's credential copy (the desktop app keeps its sign-in)",
       "  config   Read or write persisted configuration",
       "  accounts List stored accounts, or: accounts add [--label X] | use <id> | clear | remove <id> | rename <id> <name> | renew [id] | export | import <file>",
+      "                    (--no-checkin skips the check-in query; use it for frequent credit refreshes)",
+      "                    (--id <id> queries just that one account)",
       "  checkin  Claim today's check-in (all stored accounts, or --id <id>)",
       "",
       "Common options:",
@@ -98,6 +100,27 @@ function safeMessage(error) {
     .replace(/(\b(?:code|token|refresh_token|access_token)=)[^&\s]+/giu, "$1[redacted]");
 }
 
+/**
+ * 哪些参数是「开关」（不带值）。
+ *
+ * 为什么要这个表：解析器默认认为 `--flag` 后面跟的不是 `--` 开头就当它的值。
+ * 对 `--label 主号` 这是对的，但对 `--force` 就错了 ——
+ * `accounts renew --force "<id1>" "<id2>"` 会把 id1 吃成 force 的值，
+ * 结果 force 没生效、id1 还被漏掉。界面上就表现为
+ * 「点了只续期，但账号有效期没变」。
+ *
+ * 所以布尔开关必须显式登记，不能靠猜。
+ */
+const BOOLEAN_FLAGS = new Set([
+  "json",
+  "quiet",
+  "force",
+  "no-auth",
+  "no-checkin",
+  "help",
+  "version",
+]);
+
 /** Parse argv into a command and a flag map. */
 function parseArgv(argv) {
   const [command, ...rest] = argv;
@@ -111,7 +134,12 @@ function parseArgv(argv) {
     const body = token.slice(2);
     const equals = body.indexOf("=");
     if (equals !== -1) {
-      flags[body.slice(0, equals)] = body.slice(equals + 1);
+      assignFlag(flags, body.slice(0, equals), body.slice(equals + 1));
+      continue;
+    }
+    // 开关类参数不消费下一个 token
+    if (BOOLEAN_FLAGS.has(body)) {
+      flags[body] = true;
       continue;
     }
     const next = rest[index + 1];
@@ -119,10 +147,57 @@ function parseArgv(argv) {
       flags[body] = true;
       continue;
     }
-    flags[body] = next;
+    assignFlag(flags, body, next);
     index += 1;
   }
   return { command, flags };
+}
+
+/**
+ * 同一个参数写多次就收集成数组。
+ *
+ * `--id a --id b` 以前是后一个覆盖前一个 —— 界面上的「全部签到」会给每个账号
+ * 都传一个 `--id`，结果只剩最后一个被处理，其余静默跳过。
+ * 改成累积之后才和界面传参的意图对得上。
+ */
+function assignFlag(flags, key, value) {
+  const existing = flags[key];
+  if (existing === undefined) {
+    flags[key] = value;
+    return;
+  }
+  if (Array.isArray(existing)) {
+    existing.push(value);
+    return;
+  }
+  flags[key] = [existing, value];
+}
+
+/**
+ * 把 `--id a --id b` 和位置参数统一成一个 id 列表。
+ *
+ * @returns {string[]|undefined} undefined 表示「没指定，即全部账号」
+ */
+function requestedIds(flags, positionals = []) {
+  const list = [];
+  const push = (value) => {
+    if (typeof value === "string" && value !== "") list.push(value);
+    else if (Array.isArray(value)) for (const item of value) push(item);
+  };
+  push(flags["id"]);
+  for (const item of positionals) push(item);
+  return list.length === 0 ? undefined : list;
+}
+
+/** 前缀匹配展开成完整 id，去重。 */
+async function resolveAccountIds(vault, tokens) {
+  if (tokens === undefined) return undefined;
+  const out = [];
+  for (const token of tokens) {
+    const id = await resolveAccountId(vault, token);
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
 }
 
 /**
@@ -187,8 +262,11 @@ async function primeCatalog({ client, catalog, store, router }) {
 /** `status` — sign-in, credit, catalog provenance. */
 async function commandStatus(flags, config) {
   const context = await makeContext(flags, config);
-  const { variant, client, store, catalog } = context;
-  const signIn = await store.status();
+  const { variant, client, store, router, catalog } = context;
+  // 走 router：保险库里选了号就显示那个号的，跟网关实际用的保持一致。
+  // （以前直接问 store，结果网关在用保险库的号、首页却显示桌面 App 的号）
+  const source = router ?? store;
+  const signIn = await source.status();
   const json = flags["json"] === true;
   const prime = await primeCatalog(context);
 
@@ -220,7 +298,7 @@ async function commandStatus(flags, config) {
 
   let credits;
   try {
-    const credential = await store.resolve();
+    const credential = await source.resolve();
     credits = await client.fetchCredits(credential);
   } catch (error) {
     credits = { total: undefined, error: safeMessage(error) };
@@ -603,8 +681,11 @@ async function resolveAccountId(vault, token) {
 }
 
 /** 拉每个账号的积分和签到状态。单个账号出错不影响其它账号。 */
-async function collectAccountStates({ variant, client, vault }, { withCheckin }) {
-  const list = await vault.list();
+async function collectAccountStates({ variant, client, vault }, { withCheckin, onlyId }) {
+  const all = await vault.list();
+  // onlyId：只查一个。给界面上的「单行刷新」用 —— 6 个号全刷太慢，
+  // 用户往往只想看其中一个的最新余额。
+  const list = onlyId === undefined ? all : all.filter((account) => account.id === onlyId);
   const out = [];
 
   for (const account of list) {
@@ -740,9 +821,11 @@ async function commandAccounts(flags, config) {
     // 所以只要在窗口内刷一次，就又能续 60 天。
     const force = flags["force"] === true;
     const list = await vault.list();
-    const targets = rest.length > 0
-      ? [await resolveAccountId(vault, rest[0])]
-      : list.map((account) => account.id);
+
+    // 支持任意多个 id（位置参数或 --id 都行）。
+    // 以前只取 rest[0]，界面传 6 个 id 结果只续了第一个，其余静默跳过。
+    const wanted = await resolveAccountIds(vault, requestedIds(flags, rest));
+    const targets = wanted === undefined ? list.map((account) => account.id) : wanted;
 
     if (targets.length === 0) {
       process.stderr.write("accounts renew: 保险库里没有账号\n");
@@ -795,13 +878,22 @@ async function commandAccounts(flags, config) {
 
   // 默认：列表
   const activeId = await vault.activeId();
-  const states = await collectAccountStates(context, { withCheckin: true });
+  // --no-checkin：只拉积分，跳过签到状态。
+  // 自动刷新会频繁跑，签到状态（每天只变一次）没必要每次都问。
+  const withCheckin = flags["no-checkin"] !== true;
+  const onlyId =
+    typeof flags["id"] === "string" && flags["id"] !== ""
+      ? await resolveAccountId(vault, flags["id"])
+      : undefined;
+  const states = await collectAccountStates(context, { withCheckin, onlyId });
   if (json) {
     process.stdout.write(
       `${JSON.stringify({
         schemaVersion: SCHEMA_VERSION,
         provider: variant.id,
         activeId,
+        fetchedAt: new Date().toISOString(),
+        withCheckin,
         vaultPath: accountsPath(variant),
         desktopAuthFile: store.desktopAuthPath(),
         data: states,
@@ -839,23 +931,30 @@ async function commandCheckin(flags, config) {
   }
 
   let targets = list;
-  if (typeof flags["id"] === "string") {
-    const id = await resolveAccountId(vault, flags["id"]);
-    targets = list.filter((account) => account.id === id);
+  const wanted = await resolveAccountIds(vault, requestedIds(flags, []));
+  if (wanted !== undefined) {
+    targets = list.filter((account) => wanted.includes(account.id));
   }
 
   const results = [];
+  const force = flags["force"] === true;
   for (const account of targets) {
     const name = account.label || account.nickname || account.uid.slice(0, 8);
     try {
-      // 顺手续期：签到的频率（通常每天）远高于 60 天窗口，所以只要在跑就不会掉登录
+      // 手动点按钮时 force=true：一定真的发刷新请求。
+      //
+      // 以前走的是 45 天阈值 —— 窗口还剩 59 天就直接跳过，
+      // 界面上看着就是“点了没反应”。用户点按钮的意思就是“现在刷一下”，
+      // 不是“你自己判断需不需要”。
+      // 自动路径（定时器 / --maintain）保持阈值，那个才是真不该白刷。
       let renewed = false;
+      let daysLeft;
       let renewError;
       try {
-        renewed = (await vault.renewIfStale(account.id)).renewed;
+        const outcome = await vault.renewIfStale(account.id, { force });
+        renewed = outcome.renewed;
+        daysLeft = outcome.daysLeft;
       } catch (error) {
-        // 续期失败不拦住签到（下面用旧 token 照样能试），但**必须记下来** ——
-        // 吞掉错误会让「为什么没续上」变成谜案。
         renewError = safeMessage(error);
       }
 
@@ -863,15 +962,24 @@ async function commandCheckin(flags, config) {
       if (credential === undefined) throw new Error("账号已不在库里");
       const outcome = await ensureCheckedIn(client, variant, credential);
       if (outcome.claimed) await vault.markCheckedIn(account.id);
+
+      // 把“续期”和“签到”分别报出来，别让用户对着一句笼统的话猜。
+      const parts = [];
+      if (renewError !== undefined) parts.push(`续期失败（${renewError}）`);
+      else if (renewed) parts.push(`已续期，可续 ${daysLeft} 天`);
+      else if (force) parts.push(`续期无变化（可续 ${daysLeft} 天）`);
+      parts.push(outcome.msg);
+
       results.push({
         id: account.id,
         label: name,
-        ok: outcome.ok,
+        ok: outcome.ok && renewError === undefined,
         claimed: outcome.claimed,
         renewed,
+        daysLeft,
         ...(renewError === undefined ? {} : { renewError }),
         code: outcome.code,
-        msg: renewError === undefined ? outcome.msg : `${outcome.msg}（续期失败：${renewError}）`,
+        msg: parts.join("；"),
         checkin: outcome.status,
       });
     } catch (error) {
@@ -898,7 +1006,11 @@ async function commandCheckin(flags, config) {
       process.stdout.write(`${mark} ${pad(result.label, 14)} ${result.msg}\n`);
     }
     const claimed = results.filter((result) => result.claimed).length;
-    process.stdout.write(`\n共 ${results.length} 个账号，本次新签到 ${claimed} 个\n`);
+    const renewed = results.filter((result) => result.renewed).length;
+    process.stdout.write(`\n共 ${results.length} 个账号，本次续期 ${renewed} 个，新签到 ${claimed} 个\n`);
+    if (renewed === 0 && claimed === 0) {
+      process.stdout.write("（续期窗口还够、今天也都签过了，所以没有需要做的事 —— 这不是失败）\n");
+    }
   }
 
   return results.every((result) => result.ok) ? 0 : 1;

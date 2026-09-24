@@ -10,6 +10,22 @@ namespace WorkBuddyPanel;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _vm;
+    private readonly System.Windows.Threading.DispatcherTimer _accountsTimer;
+
+    /// <summary>
+    /// 滚动到底的节流。
+    ///
+    /// 流式输出一秒能来几十段，每段都 BeginInvoke 一次 ScrollToEnd 是白耗 ——
+    /// 人眼根本分不出 20ms 和 200ms 的区别，但 UI 线程会因此一顿一顿的。
+    /// 合并成“最多每 100ms 滚一次”，观感上反而更顺。
+    /// </summary>
+    private readonly System.Windows.Threading.DispatcherTimer _scrollTimer;
+
+    /// <summary>
+    /// 只有停在「账号」页时才自动刷新 —— 积分是按次扣的，
+    /// 用户没在看的时候不该白白发请求。
+    /// </summary>
+    private bool _onAccountsTab;
 
     public MainWindow()
     {
@@ -21,7 +37,41 @@ public partial class MainWindow : Window
 
         _vm.Messages.CollectionChanged += OnMessagesChanged;
         Closing += OnClosing;
+
+        // 滚动节流器：只负责“攒着”，真正的滚动在 Tick 里做一次
+        _scrollTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(100),
+        };
+        _scrollTimer.Tick += (_, _) =>
+        {
+            _scrollTimer.Stop();
+            ChatScroll?.ScrollToEnd();
+        };
+
+        // 账号页的自动刷新：定时器只负责计数，真正跑不跑看下面两个开关
+        _accountsTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(_vm.AccountsRefreshSeconds),
+        };
+        _accountsTimer.Tick += async (_, _) =>
+        {
+            if (!_onAccountsTab) return;
+            if (!_vm.AccountsAutoRefresh) return;
+            await _vm.RefreshAccountsLightAsync();
+        };
+        _accountsTimer.Start();
+
+        MainTabs.SelectionChanged += (_, _) =>
+        {
+            _onAccountsTab = MainTabs.SelectedIndex == AccountsTabIndex;
+            // 刚切过来先刷一次，不用等一个周期
+            if (_onAccountsTab) _ = _vm.RefreshAccountsLightAsync();
+        };
     }
+
+    /// <summary>「账号」标签页的下标。加页时跟着调。</summary>
+    private int AccountsTabIndex => 2;
 
     public MainViewModel ViewModel => _vm;
 
@@ -34,9 +84,8 @@ public partial class MainWindow : Window
         // 维护模式：只续期+签到，完事就退，不碰网关也不连界面
         if (App.MaintainOnly)
         {
-            _vm.DetectPaths();
+            await _vm.DetectPathsAsync();
             await _vm.RunMaintenanceAsync();
-            ((App)Application.Current).ExitApp();
             return;
         }
 
@@ -114,8 +163,16 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 请求滚动到底。
+    ///
+    /// **不是马上滚**，而是把滚动安排到 100ms 后的那一帧。
+    /// 流式输出期间这个方法一秒会被叫几十次，但实际只滚 10 次。
+    /// </summary>
     private void ScrollChatToEnd()
-        => Dispatcher.BeginInvoke(() => ChatScroll?.ScrollToEnd(), System.Windows.Threading.DispatcherPriority.Background);
+    {
+        if (!_scrollTimer.IsEnabled) _scrollTimer.Start();
+    }
 
     private void BrowseNode_Click(object sender, RoutedEventArgs e)
     {
@@ -159,10 +216,34 @@ public partial class MainWindow : Window
         _vm.ApiDirectory = picked;
     }
 
-    private void AutoDetect_Click(object sender, RoutedEventArgs e)
+    private async void AutoDetect_Click(object sender, RoutedEventArgs e)
     {
-        _vm.DetectPaths();
+        await _vm.DetectPathsAsync();
         _vm.SaveSettingsCommand.Execute(null);
+    }
+
+    /// <summary>首页那个「去账号页」按钮。</summary>
+    private void GoToAccountsTab_Click(object sender, RoutedEventArgs e)
+    {
+        MainTabs.SelectedIndex = AccountsTabIndex;
+    }
+
+    /// <summary>界面里的超链接（免责声明里的署名链接）。</summary>
+    private void OpenLink_Click(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = e.Uri.AbsoluteUri,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            _vm.LogMaintenance($"打开链接失败：{ex.Message}");
+        }
+        e.Handled = true;
     }
 
     /// <summary>输入框里回车 = 发送；Shift+回车 = 换行。</summary>

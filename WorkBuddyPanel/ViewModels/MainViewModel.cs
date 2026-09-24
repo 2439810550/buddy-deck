@@ -175,7 +175,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _authFile = settings.AuthFile ?? "";
         _minimizeToTray = settings.MinimizeToTray;
         _autoStartGateway = settings.AutoStartGateway;
-        _autoStartWithWindows = AutoStart.IsEnabled();
+        _accountsAutoRefresh = settings.AccountsAutoRefresh;
+        // 开机自启的真实状态要读注册表（约 12ms）。放这里会让窗口晚一拍出来，
+        // 先按配置显示，真实值由 InitializeAsync 在窗口显示后校正。
+        _autoStartWithWindows = settings.AutoStartWithWindows;
 
         _gateway.LogLine += OnGatewayLog;
         _gateway.Exited += _ => OnGatewayExited();
@@ -190,7 +193,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ClearChatCommand = new RelayCommand(() => { Messages.Clear(); OnPropertyChanged(nameof(HasMessages)); });
         ClearLogCommand = new RelayCommand(() => Log.Clear());
         SaveSettingsCommand = new RelayCommand(SaveSettings);
-        DetectPathsCommand = new RelayCommand(DetectPaths);
+        DetectPathsCommand = new AsyncRelayCommand(DetectPathsAsync, null, ReportError);
         CopyBaseUrlCommand = new RelayCommand(() => CopyToClipboard(BaseUrl, "Base URL"));
         CopyApiKeyCommand = new RelayCommand(() => CopyToClipboard(ApiKey, "API Key"));
         OpenStateFolderCommand = new RelayCommand(OpenStateFolder);
@@ -198,6 +201,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         InitialiseClients();
         InitialiseAccounts();
+
+        // 一次性提示的自动清除
+        _statusTimer.Tick += (_, _) =>
+        {
+            _statusTimer.Stop();
+            StatusIsTransient = false;
+            StatusDetail = "";
+        };
     }
 
     // ── 可绑定的集合 ────────────────────────────────────────────
@@ -274,6 +285,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         set
         {
             if (!Set(ref _autoStartWithWindows, value)) return;
+
+            // 缓存值先落盘：下次启动就用这个值把开关摆上，
+            // 不用为了一个勾去读注册表、拖慢窗口出现。
+            _settings.AutoStartWithWindows = value;
+            _settings.Save();
+
             try
             {
                 if (value) AutoStart.Enable();
@@ -290,6 +307,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 {
                     _autoStartWithWindows = actual;
                     Raise(nameof(AutoStartWithWindows));
+                    _settings.AutoStartWithWindows = actual;
+                    _settings.Save();
                 }
                 ReportError(ex);
             }
@@ -382,6 +401,39 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private string _statusDetail = "";
     public string StatusDetail { get => _statusDetail; private set => Set(ref _statusDetail, value); }
 
+    /// <summary>底部提示是不是「一次性」的（会自己消失）。</summary>
+    private bool _statusIsTransient;
+    public bool StatusIsTransient { get => _statusIsTransient; private set => Set(ref _statusIsTransient, value); }
+
+    private readonly System.Windows.Threading.DispatcherTimer _statusTimer = new()
+    {
+        Interval = TimeSpan.FromSeconds(12),
+    };
+
+    /// <summary>
+    /// 底部那行一次性提示。
+    ///
+    /// 以前的实现是 `StatusDetail = "续期完成"` 然后就**永久停在那儿** ——
+    /// 过半小时你还看到“续期完成”，根本分不清那是刚发生的还是很久以前的。
+    /// 现在这类“动作已做完”的回执 12 秒后自己消失，
+    /// 真正的状态（路径来源、错误）还是用常驻的 StatusDetail。
+    /// </summary>
+    private void FlashStatus(string message)
+    {
+        StatusDetail = message;
+        Raise(nameof(StatusIsTransient));
+        _statusTimer.Stop();
+        _statusTimer.Start();
+    }
+
+    /// <summary>常驻状态：不会被自动清掉（错误、当前配置这类）。</summary>
+    private void SetStatus(string message)
+    {
+        _statusTimer.Stop();
+        StatusIsTransient = false;
+        StatusDetail = message;
+    }
+
     /// <summary>配置读坏时的警告文案（空 = 没事）。</summary>
     private string _configWarning = "";
     public string ConfigWarning
@@ -466,7 +518,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public RelayCommand ClearChatCommand { get; }
     public RelayCommand ClearLogCommand { get; }
     public RelayCommand SaveSettingsCommand { get; }
-    public RelayCommand DetectPathsCommand { get; }
+    public AsyncRelayCommand DetectPathsCommand { get; }
     public RelayCommand CopyBaseUrlCommand { get; }
     public RelayCommand CopyApiKeyCommand { get; }
     public RelayCommand OpenStateFolderCommand { get; }
@@ -523,39 +575,44 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         AppendLog($"读到的设置：托盘常驻={MinimizeToTray}，启动时自动开网关={AutoStartGateway}，开机自启={AutoStartWithWindows}");
 
-        if (!CanRunNode) DetectPaths();
+        if (!CanRunNode) await DetectPathsAsync();
         if (!CanRunNode)
         {
             StatusDetail = PathsHint;
             return;
         }
 
-        try
-        {
-            await RefreshStatusAsync();
-        }
-        catch (Exception ex)
-        {
-            AppendLog($"[status] 读取失败：{ex.Message}");
-            StatusDetail = $"读取账号信息失败：{ex.Message}";
-        }
-
-        try
-        {
-            await RefreshModelsAsync();
-        }
-        catch (Exception ex)
-        {
-            AppendLog($"[models] 刷新失败：{ex.Message}");
-        }
+        // 路径探测、客户端探测、账号列表、状态、模型 —— 全部丢到一起并行跑。
+        //
+        // 以前是串行的：路径（50-250ms）→ 客户端探测 → 账号列表（1.9s）
+        // → status → models，加起来两秒多，而且每一步都把 UI 线程占着。
+        // 现在并行，总耗时看最慢的那一个（账号列表 1.9s），而且全程不卡界面。
+        await Task.WhenAll(
+            RefreshClientsAsync(),
+            RefreshAccountsAsync(),
+            RefreshStatusAsync(),
+            RefreshModelsAsync());
     }
 
     // ── 路径探测 ───────────────────────────────────────────────
-    public void DetectPaths()
+    /// <summary>
+    /// 定位 node.exe 和 workbuddy_api 目录。
+    ///
+    /// 这里会扫 PATH、查几个常见安装位置、向上逐级找目录（实测总共 50～250ms）。
+    /// 所以是 async 的：调度到线程池跑，
+    /// 调用方拿到的不是“结果”，而是“已经算完的结果”——
+    /// 不这样做的话，窗口会出现之前会先卡一下。
+    /// </summary>
+    public async Task DetectPathsAsync()
     {
-        var (node, api) = ProcessLocator.Resolve(NodePath, ApiDirectory);
-        if (node is not null) NodePath = node;
-        if (api is not null) ApiDirectory = api;
+        // 先拿走 hint，因为下面要上后台线程，不能读实例字段之外的东西
+        var nodeHint = NodePath;
+        var apiHint = ApiDirectory;
+
+        var resolved = await Task.Run(() => ProcessLocator.Resolve(nodeHint, apiHint));
+
+        if (resolved.Node is not null) NodePath = resolved.Node;
+        if (resolved.Api is not null) ApiDirectory = resolved.Api;
 
         AppendLog($"node.exe：{NodePath ?? "(没找到)"}　来源：{NodeOriginText}");
         AppendLog($"workbuddy_api：{ApiDirectory ?? "(没找到)"}　来源：{ApiOriginText}");
@@ -580,11 +637,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             Clipboard.SetText(value);
-            StatusDetail = $"已复制 {what} 到剪贴板";
+            FlashStatus($"已复制 {what} 到剪贴板");
         }
         catch (Exception ex)
         {
-            StatusDetail = $"复制失败：{ex.Message}";
+            FlashStatus($"复制失败：{ex.Message}");
         }
     }
 
@@ -647,7 +704,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _chat?.Dispose();
             _chat = new ChatStreamClient(BaseUrl, ApiKey);
             IsGatewayRunning = true;
-            StatusDetail = "网关已启动，可以在「对话」标签页直接试，或把 Base URL 复制给别的工具。";
+            FlashStatus("网关已启动");
             AppendLog($"网关就绪：{BaseUrl}");
         }
         finally
@@ -758,6 +815,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SetSignInState(signedIn ? "已登录" : (dto.Status ?? "未登录"), signedIn ? "Ok" : "Bad");
 
         CreditsText = dto.Credits is { } credits ? credits.ToString("0.##", CultureInfo.InvariantCulture) : "—";
+        Raise(nameof(StatusCreditsText));
 
         if (DateTimeOffset.TryParse(dto.AccessTokenExpires, CultureInfo.InvariantCulture,
                 DateTimeStyles.AdjustToUniversal, out var expires))
@@ -825,7 +883,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             }
 
             AppendLog($"[models] 拿到 {Models.Count} 个模型（来源 {CatalogSourceText}）");
-            RefreshClients();   // 接入页要用模型名和上下文窗口，刷新后同步过去
+            await RefreshClientsAsync();   // 接入页要用模型名和上下文窗口，刷新后同步过去
             await RefreshAccountsAsync();   // 账号页要用 uid / 昵称去重，也刷一下
         }
         finally
@@ -846,7 +904,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             foreach (var line in result.Combined.Split('\n'))
                 AppendLog(line.TrimEnd());
             AppendLog("==================");
-            StatusDetail = "体检完成，结果在「日志」标签页。";
+            FlashStatus("体检完成，结果在「日志」标签页");
         }
         finally
         {
@@ -857,7 +915,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task AutoDetectAllAsync()
     {
-        DetectPaths();
+        await DetectPathsAsync();
         SaveSettings();
         await RefreshStatusAsync();
         await RefreshModelsAsync();
@@ -930,6 +988,29 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             IsGenerating = false;
             _generation?.Dispose();
             _generation = null;
+        }
+    }
+
+    /// <summary>开机自启的真实状态（读注册表）。后台跑，回来补正界面。</summary>
+    private async Task RefreshAutoStartStateAsync()
+    {
+        try
+        {
+            // Describe() 也要读注册表，一并丢后台
+            var (enabled, description) = await Task.Run(() =>
+                (AutoStart.IsEnabled(), AutoStart.Describe()));
+
+            NotifyAutoStartChanged(enabled);
+            if (_settings.AutoStartWithWindows != enabled)
+            {
+                _settings.AutoStartWithWindows = enabled;
+                _settings.Save();
+            }
+            AppendLog(enabled ? $"开机自启：已开启（{description}）" : "开机自启：未开启");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[设置] 读开机自启状态失败：{ex.Message}");
         }
     }
 
