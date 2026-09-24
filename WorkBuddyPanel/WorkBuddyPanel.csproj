@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <!-- 只为托盘图标（NotifyIcon）打开 WinForms；下面的 Using Remove 把 SDK 自动
          注入的 global using 去掉，否则 System.Windows.Forms 会和 WPF 的同名类型打架 -->
