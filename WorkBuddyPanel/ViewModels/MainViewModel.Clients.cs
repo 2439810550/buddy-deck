@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Text.Json;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
+using WorkBuddyPanel.Models;
 using WorkBuddyPanel.Services;
 
 namespace WorkBuddyPanel.ViewModels;
@@ -114,6 +116,8 @@ public sealed partial class MainViewModel
     public AsyncRelayCommand RestoreAllCommand { get; private set; } = null!;
     public RelayCommand RefreshClientsCommand { get; private set; } = null!;
     public RelayCommand OpenCcSwitchCommand { get; private set; } = null!;
+    public AsyncRelayCommand SyncCcSwitchCommand { get; private set; } = null!;
+    public AsyncRelayCommand ApplyFromCcSwitchCommand { get; private set; } = null!;
 
     private string _clientsSummary = "";
     public string ClientsSummary { get => _clientsSummary; private set => Set(ref _clientsSummary, value); }
@@ -163,6 +167,8 @@ public sealed partial class MainViewModel
         RestoreAllCommand = new AsyncRelayCommand(RestoreAllAsync, () => HasAnyBackup, ReportError);
         RefreshClientsCommand = new RelayCommand(() => _ = RefreshClientsAsync(), () => CanRunNode);
         OpenCcSwitchCommand = new RelayCommand(OpenCcSwitch);
+        SyncCcSwitchCommand = new AsyncRelayCommand(SyncCcSwitchAsync, () => CanRunNode, ReportError);
+        ApplyFromCcSwitchCommand = new AsyncRelayCommand(ApplyFromCcSwitchAsync, () => CanRunNode, ReportError);
         // 不在构造函数里探测：探测要读 4 个客户端的配置文件 + 查注册表，
         // 放在构造里会让窗口晚一拍才出来。改由 InitializeAsync 在窗口显示后做。
     }
@@ -310,7 +316,17 @@ public sealed partial class MainViewModel
 
         foreach (var line in lines) AppendLog("[接入] " + line);
         await RefreshClientsAsync();
-        StatusDetail = $"已配置 {targets.Count} 个客户端";
+
+        // 写完客户端配置，再把**同一份内容**镜像给 CC Switch。
+        //
+        // 顺序很重要：镜像读的就是刚写好的那些文件。
+        // 为什么一定要写：CC Switch 切换供应商时是**整体覆盖**配置文件的，
+        // 它列表里没我们这一条的话，用户切一下就把刚写的东西冲掉了。
+        if (CcSwitch.IsAvailable) await SyncCcSwitchAsync();
+
+        FlashStatus(CcSwitch.IsAvailable
+            ? $"已配置 {targets.Count} 个客户端，并同步到 CC Switch"
+            : $"已配置 {targets.Count} 个客户端");
     }
 
     internal async Task RestoreClientAsync(ClientRowVm row)
@@ -336,18 +352,173 @@ public sealed partial class MainViewModel
         IntegrateResult = string.Join("\n", messages);
         foreach (var message in messages) AppendLog("[接入] " + message);
         await RefreshClientsAsync();
+
+        // 还原后 CC Switch 里那份就过期了，顺手对齐一下状态显示
+        if (CcSwitch.IsAvailable) await RefreshCcSwitchStateAsync();
+
         FlashStatus("已还原所有客户端配置");
     }
 
+    private string _ccSwitchSummary = "";
+    public string CcSwitchSummary { get => _ccSwitchSummary; private set => Set(ref _ccSwitchSummary, value); }
+
+    private bool _ccSwitchAvailable;
+    public bool CcSwitchAvailable
+    {
+        get => _ccSwitchAvailable;
+        private set => Set(ref _ccSwitchAvailable, value);
+    }
+
+    /// <summary>
+    /// 把网关镜像进 CC Switch 的供应商列表。
+    ///
+    /// 内容不重算，而是把刚写进各 agent 配置文件的那份**原样搬过去** ——
+    /// 两边永远一致，也不会出现“JS 和 C# 各算一遍算不一样”。
+    ///
+    /// 不动的：`is_current`（哪一个是“用户现在用的”应该由用户决定）。
+    /// </summary>
+    private async Task SyncCcSwitchAsync()
+    {
+        if (!CcSwitch.IsAvailable)
+        {
+            CcSwitchSummary = $"没找到 CC Switch 的库（{CcSwitch.DbPath}）—— 可能没装或从没启动过。" +
+                              "这一步可以跳过，不影响网关本身。";
+            AppendLog("[CC Switch] " + CcSwitchSummary);
+            return;
+        }
+
+        IsBusy = true;
+        BusyText = "正在写入 CC Switch…";
+        try
+        {
+            var result = await CliRunner.RunAsync(
+                NodePath, ApiDirectory, $"src/bin.js ccswitch --json{ProviderArgs()}");
+            var json = CliRunner.ExtractJson(result.StdOut);
+
+            if (json is null)
+            {
+                CcSwitchSummary = "写 CC Switch 失败，看「日志」标签页。";
+                AppendLog("[CC Switch] " + result.Combined);
+                return;
+            }
+
+            var dto = JsonSerializer.Deserialize<CcSwitchResultDto>(json);
+            if (dto?.Ok != true)
+            {
+                CcSwitchSummary = dto?.Reason ?? "写 CC Switch 失败";
+                AppendLog("[CC Switch] " + CcSwitchSummary);
+                return;
+            }
+
+            var lines = new List<string>();
+            if (dto.Written is { Count: > 0 })
+                lines.Add($"已镜像到 CC Switch：{string.Join("、", dto.Written)}");
+            if (dto.Adopted is { Count: > 0 })
+            {
+                var names = dto.Adopted
+                    .Where(item => item is not null)
+                    .Select(item => $"{item!.AppType}（你原来建的供应商「{item.Name}」）");
+                lines.Add("复用了你已有的条目，没有重复新建：" + string.Join("、", names));
+            }
+            if (dto.Skipped is { Count: > 0 })
+                lines.Add("跳过：" + string.Join("、", dto.Skipped));
+            lines.Add("没有改动「当前使用」标记。要切过去在 CC Switch 里选中它即可。");
+
+            CcSwitchSummary = string.Join("\n", lines);
+            AppendLog("[CC Switch] " + CcSwitchSummary.Replace("\n", " / "));
+            FlashStatus("已同步到 CC Switch");
+        }
+        finally
+        {
+            IsBusy = false;
+            BusyText = "";
+        }
+    }
+
+    /// <summary>只读看一眼 CC Switch 里现在有什么。只在窗口显示后调。</summary>
+    private async Task RefreshCcSwitchStateAsync()
+    {
+        CcSwitchAvailable = CcSwitch.IsAvailable;
+        if (!CcSwitchAvailable) return;
+
+        try
+        {
+            var result = await CliRunner.RunAsync(
+                NodePath, ApiDirectory, $"src/bin.js ccswitch --status --json{ProviderArgs()}");
+            var json = CliRunner.ExtractJson(result.StdOut);
+            if (json is null) return;
+
+            var dto = JsonSerializer.Deserialize<CcSwitchStatusDto>(json);
+            var ours = dto?.Entries?.Where(entry => entry.IsOurs).ToList() ?? [];
+            CcSwitchSummary = ours.Count == 0
+                ? "CC Switch 里还没有 WorkBuddy 供应商。点「全部配置」会一并写进去。"
+                : "CC Switch 里的 WorkBuddy 供应商：" + string.Join("、",
+                    ours.Select(entry => $"{entry.AppType}/{entry.Id}{(entry.IsCurrent ? "（当前使用）" : "")}"));
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[CC Switch] 查询失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 从 CC Switch 的库反向写回客户端配置文件。
+    ///
+    /// 两个用途：修“库里有、文件里没有”的不一致；
+    /// 或者在 CC Switch 界面里把供应商内容改好了，不用再去点它的“启用”。
+    /// </summary>
+    private async Task ApplyFromCcSwitchAsync()
+    {
+        IsBusy = true;
+        BusyText = "正在写回客户端配置…";
+        try
+        {
+            var result = await CliRunner.RunAsync(
+                NodePath, ApiDirectory, $"src/bin.js ccswitch --apply --json{ProviderArgs()}");
+            var json = CliRunner.ExtractJson(result.StdOut);
+
+            if (json is null)
+            {
+                IntegrateResult = result.Combined;
+                return;
+            }
+
+            var dto = JsonSerializer.Deserialize<CcSwitchApplyDto>(json);
+            var lines = new List<string>();
+            if (dto?.Applied is { Count: > 0 })
+                lines.Add($"✓ 已写回客户端配置：{string.Join("、", dto.Applied)}");
+            foreach (var item in dto?.Skipped ?? [])
+                lines.Add($"· 跳过 {item}");
+            if (dto?.Backups is { Count: > 0 })
+            {
+                lines.Add("");
+                lines.Add("改前的文件都留了备份：");
+                foreach (var path in dto.Backups) lines.Add("  " + path);
+            }
+
+            IntegrateResult = lines.Count > 0 ? string.Join("\n", lines) : "没有任何文件被修改。";
+            AppendLog("[CC Switch] " + IntegrateResult.Replace("\n", " / "));
+            FlashStatus(dto?.Applied is { Count: > 0 } ? "已从 CC Switch 写回客户端配置" : "没有可写回的内容");
+        }
+        finally
+        {
+            IsBusy = false;
+            BusyText = "";
+        }
+
+        await RefreshClientsAsync();
+    }
+
+    /// <summary>打开 CC Switch 本体。</summary>
     private void OpenCcSwitch()
     {
-        var exe = ClientIntegrator.FindCcSwitch();
+        var exe = CcSwitch.FindExecutable();
         if (exe is null)
         {
             MessageBox.Show(
                 "没找到 CC Switch 的安装位置。\n\n" +
-                "如果你没装它，直接点上面的「全部配置」就行 —— 本程序是直接改各客户端的配置文件，" +
-                "不依赖 CC Switch。",
+                "如果你没装它，本程序不依赖它 —— 直接用「全部配置」就行，\n" +
+                "本程序是直接改各客户端的配置文件。",
                 "WorkBuddy 控制台", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }

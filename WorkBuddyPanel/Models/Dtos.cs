@@ -169,3 +169,50 @@ public sealed class ImportResultDto
     [JsonPropertyName("daysLeft")] public int? DaysLeft { get; set; }
     [JsonPropertyName("msg")] public string? Msg { get; set; }
 }
+
+/// <summary>`node src/bin.js ccswitch --json` 的返回结构。</summary>
+public sealed class CcSwitchResultDto
+{
+    [JsonPropertyName("ok")] public bool Ok { get; set; }
+    [JsonPropertyName("written")] public List<string>? Written { get; set; }
+    [JsonPropertyName("created")] public List<string>? Created { get; set; }
+    [JsonPropertyName("adopted")] public List<CcSwitchAdoptedDto>? Adopted { get; set; }
+    [JsonPropertyName("skipped")] public List<string>? Skipped { get; set; }
+    [JsonPropertyName("backupPath")] public string? BackupPath { get; set; }
+    [JsonPropertyName("reason")] public string? Reason { get; set; }
+}
+
+public sealed class CcSwitchAdoptedDto
+{
+    [JsonPropertyName("appType")] public string? AppType { get; set; }
+    [JsonPropertyName("id")] public string? Id { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+}
+
+/// <summary>`ccswitch --status --json`。</summary>
+public sealed class CcSwitchStatusDto
+{
+    [JsonPropertyName("ok")] public bool Ok { get; set; }
+    [JsonPropertyName("dbPath")] public string? DbPath { get; set; }
+    [JsonPropertyName("entries")] public List<CcSwitchEntryDto>? Entries { get; set; }
+    [JsonPropertyName("reason")] public string? Reason { get; set; }
+}
+
+public sealed class CcSwitchEntryDto
+{
+    [JsonPropertyName("id")] public string? Id { get; set; }
+    [JsonPropertyName("appType")] public string? AppType { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("isCurrent")] public bool IsCurrent { get; set; }
+    [JsonPropertyName("isOurs")] public bool IsOurs { get; set; }
+}
+
+/// <summary>`ccswitch --apply --json`。</summary>
+public sealed class CcSwitchApplyDto
+{
+    [JsonPropertyName("ok")] public bool Ok { get; set; }
+    [JsonPropertyName("applied")] public List<string>? Applied { get; set; }
+    [JsonPropertyName("skipped")] public List<string>? Skipped { get; set; }
+    [JsonPropertyName("backups")] public List<string>? Backups { get; set; }
+    [JsonPropertyName("reason")] public string? Reason { get; set; }
+}

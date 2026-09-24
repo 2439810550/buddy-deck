@@ -193,6 +193,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ClearChatCommand = new RelayCommand(() => { Messages.Clear(); OnPropertyChanged(nameof(HasMessages)); });
         ClearLogCommand = new RelayCommand(() => Log.Clear());
         SaveSettingsCommand = new RelayCommand(SaveSettings);
+        ResetSettingsCommand = new RelayCommand(ResetSettings);
         DetectPathsCommand = new AsyncRelayCommand(DetectPathsAsync, null, ReportError);
         CopyBaseUrlCommand = new RelayCommand(() => CopyToClipboard(BaseUrl, "Base URL"));
         CopyApiKeyCommand = new RelayCommand(() => CopyToClipboard(ApiKey, "API Key"));
@@ -220,13 +221,34 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     // ── 路径 / 设置 ────────────────────────────────────────────
     private string _nodePath;
-    public string NodePath { get => _nodePath; set { if (Set(ref _nodePath, value)) RaiseDerived(); } }
+    public string NodePath
+    {
+        get => _nodePath;
+        set
+        {
+            if (Set(ref _nodePath, value)) { RaiseDerived(); MarkDirty(); }
+        }
+    }
 
     private string _apiDirectory;
-    public string ApiDirectory { get => _apiDirectory; set { if (Set(ref _apiDirectory, value)) RaiseDerived(); } }
+    public string ApiDirectory
+    {
+        get => _apiDirectory;
+        set
+        {
+            if (Set(ref _apiDirectory, value)) { RaiseDerived(); MarkDirty(); }
+        }
+    }
 
     private string _port;
-    public string Port { get => _port; set => Set(ref _port, value); }
+    public string Port
+    {
+        get => _port;
+        set
+        {
+            if (Set(ref _port, value)) SettingsDirty = true;
+        }
+    }
 
     private string _provider;
     public string Provider
@@ -238,15 +260,64 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             {
                 Raise(nameof(ProviderLabel));
                 Raise(nameof(IsInternational));
+                SettingsDirty = true;
             }
         }
     }
 
     private string _apiKey;
-    public string ApiKey { get => _apiKey; set => Set(ref _apiKey, value); }
+    public string ApiKey
+    {
+        get => _apiKey;
+        set
+        {
+            if (Set(ref _apiKey, value)) SettingsDirty = true;
+        }
+    }
 
     private string _authFile;
-    public string AuthFile { get => _authFile; set => Set(ref _authFile, value); }
+    public string AuthFile
+    {
+        get => _authFile;
+        set
+        {
+            if (Set(ref _authFile, value)) SettingsDirty = true;
+        }
+    }
+
+    // ── 设置有没有改过没保存 ───────────────────────────────
+    //
+    // 设置页里有两种改动类型，混在一起很容易让人迷惑：
+    //   即时生效：托盘常驻、开机自启、自动刷新   → 勾了就落盘
+    //   需要保存：端口、API Key、路径           → 点「保存设置」才落盘
+    //
+    // 所以这里把“需要保存的那几个”标出来：改了就提示，存了就清。
+    // 另外「启动网关」会用这些值，没保存的话用的是旧值 —— 不提示就会很难查。
+
+    /// <summary>自动探测期间不要标脏 —— 那不是“用户的改动”。</summary>
+    private bool _suppressDirty;
+
+    private void MarkDirty()
+    {
+        if (!_suppressDirty) SettingsDirty = true;
+    }
+
+    private bool _settingsDirty;
+    public bool SettingsDirty
+    {
+        get => _settingsDirty;
+        private set
+        {
+            if (!Set(ref _settingsDirty, value)) return;
+            Raise(nameof(SettingsDirtyHint));
+        }
+    }
+
+    public string SettingsDirtyHint => SettingsDirty
+        ? "⚠ 有改动还没保存。点上面的「保存设置」，否则「启动网关」用的还是旧参数。"
+        : "改动会即时写入 settings.json；上面这几个（端口 / 版本 / 密钥 / 路径）改动后要点「保存设置」。";
+
+    /// <summary>把当前编辑中的值写进配置对象并落盘。</summary>
 
     // ── 后台驻留相关 ─────────────────────────────────────────
     /// <summary>关窗口时是否收进托盘（false 则关窗口就是退出）。</summary>
@@ -517,7 +588,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public RelayCommand StopGenerationCommand { get; }
     public RelayCommand ClearChatCommand { get; }
     public RelayCommand ClearLogCommand { get; }
-    public RelayCommand SaveSettingsCommand { get; }
+    public RelayCommand SaveSettingsCommand { get; private set; } = null!;
+    public RelayCommand ResetSettingsCommand { get; private set; } = null!;
     public AsyncRelayCommand DetectPathsCommand { get; }
     public RelayCommand CopyBaseUrlCommand { get; }
     public RelayCommand CopyApiKeyCommand { get; }
@@ -592,6 +664,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             RefreshAccountsAsync(),
             RefreshStatusAsync(),
             RefreshModelsAsync());
+
+        // 下面两个都是“读注册表 / 跑 schtasks / 读 SQLite”的慢活，
+        // 放在并行组之后补正，不挡启动。
+        await RefreshAutoStartStateAsync();
+
+        if (CcSwitch.IsAvailable) await RefreshCcSwitchStateAsync();
     }
 
     // ── 路径探测 ───────────────────────────────────────────────
@@ -611,12 +689,24 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         var resolved = await Task.Run(() => ProcessLocator.Resolve(nodeHint, apiHint));
 
-        if (resolved.Node is not null) NodePath = resolved.Node;
-        if (resolved.Api is not null) ApiDirectory = resolved.Api;
+        // 自动探测的结果不是“用户的改动”，不该让设置页显示“有未保存的改动”。
+        _suppressDirty = true;
+        try
+        {
+            if (resolved.Node is not null) NodePath = resolved.Node;
+            if (resolved.Api is not null) ApiDirectory = resolved.Api;
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
 
         AppendLog($"node.exe：{NodePath ?? "(没找到)"}　来源：{NodeOriginText}");
         AppendLog($"workbuddy_api：{ApiDirectory ?? "(没找到)"}　来源：{ApiOriginText}");
         RaiseDerived();
+
+        // 探测结果直接落盘，下次启动不用再找一遍
+        SaveSettings();
     }
 
     private void SaveSettings()
@@ -629,7 +719,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.LastModel = LastModel;
         if (int.TryParse(Port, out var p) && p is > 0 and <= 65535) _settings.Port = p;
         _settings.Save();
+        SettingsDirty = false;
         AppendLog("设置已保存到 %APPDATA%\\WorkBuddyPanel\\settings.json");
+    }
+
+    /// <summary>把需要保存的那几个恢复成默认值（并落盘）。</summary>
+    private void ResetSettings()
+    {
+        Port = "8787";
+        ApiKey = "sk-workbuddy-local";
+        AuthFile = "";
+        // 路径不恢复 —— 那个是自动探测出来的，清掉反而让程序找不到 node
+        SaveSettings();
+        FlashStatus("已恢复默认（端口 / 密钥 / 登录文件路径）");
     }
 
     private void CopyToClipboard(string value, string what)

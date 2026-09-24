@@ -11,6 +11,7 @@
  *   config    get/set persisted configuration
  *   accounts  manage multiple WorkBuddy accounts (list/add/use/remove/rename/export/import)
  *   checkin   claim the daily check-in for every stored account
+ *   ccswitch  mirror this gateway into CC Switch's provider list
  *
  * Zero runtime dependencies; requires Node 20.10+ (or 22/24).
  *
@@ -23,6 +24,7 @@ import { createGateway } from "./gateway.js";
 import { Catalog, CatalogStore, catalogPath } from "./catalog.js";
 import { CredentialStore, desktopAuthCandidates, ownAuthPath } from "./auth.js";
 import { AccountRouter, AccountVault, accountsPath } from "./accounts.js";
+import * as ccswitch from "./ccswitch.js";
 import { ensureCheckedIn, fetchCheckinStatus } from "./checkin.js";
 import { WorkBuddyClient, normalizeCredits } from "./upstream.js";
 import { CN_VARIANT, requireVariant } from "./variants.js";
@@ -68,6 +70,7 @@ function printHelp() {
       "                    (--no-checkin skips the check-in query; use it for frequent credit refreshes)",
       "                    (--id <id> queries just that one account)",
       "  checkin  Claim today's check-in (all stored accounts, or --id <id>)",
+      "  ccswitch Mirror this gateway into CC Switch (--status to just look, --remove to undo)",
       "",
       "Common options:",
       "  --provider <id>   workbuddy (default) | workbuddy-ai",
@@ -119,6 +122,9 @@ const BOOLEAN_FLAGS = new Set([
   "no-checkin",
   "help",
   "version",
+  "status",
+  "remove",
+  "apply",
 ]);
 
 /** Parse argv into a command and a flag map. */
@@ -1246,6 +1252,121 @@ async function accountsImport(flags, context, file) {
   return results.every((result) => result.ok) ? 0 : 1;
 }
 
+// ── CC Switch ───────────────────────────────────
+
+/**
+ * `ccswitch` —— 把本机网关镜像成 CC Switch 的一个供应商。
+ *
+ * 为什么要镜像：CC Switch 切换供应商时是**整体覆盖** agent 配置文件的。
+ * 如果它的列表里没有我们这一条，用户切一下就把我们写的配置冲掉了。
+ *
+ * 内容不重算，而是把当前 agent 配置文件里已有的那份原样搬过去 ——
+ * 这样两边永远一致，也不会出现“两处各算一遍算不一样”的情况。
+ */
+async function commandCcSwitch(flags) {
+  const json = flags["json"] === true;
+  const dbPath = ccswitch.defaultDbPath();
+
+  if (!ccswitch.isAvailable(dbPath)) {
+    const message = `没找到 CC Switch 的库：${dbPath}\n可能没装 CC Switch，或者从没启动过。`;
+    if (json) process.stdout.write(`${JSON.stringify({ ok: false, reason: message })}\n`);
+    else process.stderr.write(message + "\n");
+    return 1;
+  }
+
+  // 只看不改
+  if (flags["status"] === true) {
+    const state = await ccswitch.inspect(dbPath);
+    if (!state.ok) {
+      process.stderr.write(`读 CC Switch 失败：${state.reason}\n`);
+      return 1;
+    }
+
+    if (json) {
+      process.stdout.write(`${JSON.stringify({ dbPath, ...state }, null, 2)}\n`);
+      return 0;
+    }
+
+    process.stdout.write(`CC Switch 库：${dbPath}\n\n`);
+    for (const entry of state.entries) {
+      const tags = [];
+      if (entry.isOurs) tags.push("本项目的");
+      if (entry.isCurrent) tags.push("当前使用");
+      process.stdout.write(
+        `  [${entry.appType.padEnd(16)}] ${entry.id.padEnd(24)} ${entry.name}` +
+          (tags.length > 0 ? `  (${tags.join(" / ")})` : "") + "\n",
+      );
+    }
+    process.stdout.write(`\n共 ${state.entries.length} 条，app_type：${state.appTypes.join(", ")}\n`);
+    return 0;
+  }
+
+  // 删掉我们写的
+  if (flags["remove"] === true) {
+    const result = await ccswitch.removeProviders(dbPath);
+    if (!result.ok) {
+      process.stderr.write(`删除失败：${result.reason}\n`);
+      return 1;
+    }
+    if (json) process.stdout.write(`${JSON.stringify(result)}\n`);
+    else process.stdout.write(`已从 CC Switch 删掉 ${result.removed} 条本项目的条目\n`);
+    return 0;
+  }
+
+  // 把库里的配置写回 agent 文件（修不一致用）
+  if (flags["apply"] === true) {
+    const result = await ccswitch.applyToAgentFiles({ dbPath });
+    if (!result.ok) {
+      process.stderr.write(`应用失败：${result.reason}\n`);
+      return 1;
+    }
+    if (json) {
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return result.applied.length > 0 ? 0 : 1;
+    }
+    if (result.applied.length > 0) {
+      process.stdout.write(`已写回客户端配置文件：${result.applied.join("、")}\n`);
+    }
+    for (const item of result.skipped) process.stdout.write(`  跳过 ${item}\n`);
+    if (result.applied.length === 0) {
+      process.stderr.write("\n没有任何文件被修改。先在「一键接入」页配好，或者在 CC Switch 里编辑好供应商内容。\n");
+      return 1;
+    }
+    process.stdout.write("\n改前的文件都留了 .before-workbuddy-<时间> 备份。\n");
+    return 0;
+  }
+
+  // 镜像写入
+  const entries = ccswitch.buildEntriesFromAgentFiles();
+  const missing = entries.filter((entry) => !entry.present).map((entry) => entry.appType);
+  const result = await ccswitch.upsertProviders({ dbPath, entries });
+
+  if (!result.ok) {
+    if (json) process.stdout.write(`${JSON.stringify(result)}\n`);
+    else process.stderr.write(result.reason + "\n");
+    return 1;
+  }
+
+  if (json) {
+    process.stdout.write(`${JSON.stringify({ ...result, missing }, null, 2)}\n`);
+    return 0;
+  }
+
+  process.stdout.write(`已写入 CC Switch：${result.written.join("、")}\n`);
+  if (missing.length > 0) {
+    process.stdout.write(
+      `跳过 ${missing.join("、")} —— 本机没读到它们的配置文件。\n` +
+        `先在「一键接入」页配好对应客户端，再跑一遍这个命令。\n`,
+    );
+  }
+  process.stdout.write(`\n原库已备份：${result.backupPath}\n`);
+  process.stdout.write(
+    "\n注意：没有动「当前使用」标记 —— 在 CC Switch 里选哪一个是你的决定。\n" +
+      "要切到 WorkBuddy，去 CC Switch 的列表里选中它即可。\n",
+  );
+  return 0;
+}
+
 async function run(argv) {
   const { command, flags } = parseArgv(argv);
   if (command === undefined || command === "--help" || command === "-h" || command === "help") {
@@ -1257,7 +1378,7 @@ async function run(argv) {
     return 0;
   }
 
-  const known = ["serve", "status", "models", "doctor", "logout", "config", "accounts", "checkin"];
+  const known = ["serve", "status", "models", "doctor", "logout", "config", "accounts", "checkin", "ccswitch"];
   if (!known.includes(command)) {
     process.stderr.write(`workbuddy-api: expected ${known.join(", ")}; got ${JSON.stringify(command)}\n`);
     return 1;
@@ -1282,6 +1403,8 @@ async function run(argv) {
         return await commandAccounts(flags, config);
       case "checkin":
         return await commandCheckin(flags, config);
+      case "ccswitch":
+        return await commandCcSwitch(flags);
       default:
         printHelp();
         return 1;

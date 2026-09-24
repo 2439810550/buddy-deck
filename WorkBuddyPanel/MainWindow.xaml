@@ -262,7 +262,8 @@
 
                                 <StackPanel Orientation="Horizontal">
                                     <Button Content="全部配置" Style="{StaticResource PrimaryButton}"
-                                            Command="{Binding ConfigureAllCommand}" MinWidth="110" />
+                                            Command="{Binding ConfigureAllCommand}" MinWidth="110"
+                                            ToolTip="写 Claude Code / Codex / pi 的配置文件，并把同一份内容镜像进 CC Switch。写前都会备份。" />
                                     <Button Content="还原所有备份" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
                                             Command="{Binding RestoreAllCommand}" />
                                     <Button Content="重新检测" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
@@ -345,6 +346,37 @@
                                     <TextBlock Text="{Binding IntegrateResult}" TextWrapping="Wrap"
                                                FontSize="12" FontFamily="Consolas, Microsoft YaHei UI" />
                                 </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="CC Switch" Style="{StaticResource H1}" />
+                                <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
+                                    <Run Text="CC Switch 是供应商管理器。它切换供应商时是整体覆盖配置文件的 ——" />
+                                    <LineBreak />
+                                    <Run Text="如果它的列表里没有 WorkBuddy，你在别处切一下就把本程序写好的配置冲掉了。" />
+                                    <LineBreak />
+                                    <Run Text="所以「全部配置」会顺手把同一份内容镜像进去。不会新建重复条目 —— 你原来就有的那条会被复用。" />
+                                </TextBlock>
+
+                                <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,0,0,12">
+                                    <TextBlock Text="{Binding CcSwitchSummary}" Style="{StaticResource Sub}"
+                                               FontSize="12.5" TextWrapping="Wrap" />
+                                </Border>
+
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="同步到 CC Switch" Style="{StaticResource GhostButton}"
+                                            Command="{Binding SyncCcSwitchCommand}" MinWidth="130"
+                                            ToolTip="把当前客户端配置镜像进 CC Switch。不动“当前使用”标记。" />
+                                    <Button Content="从 CC Switch 写回" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                            Command="{Binding ApplyFromCcSwitchCommand}" MinWidth="130"
+                                            ToolTip="反过来：把 CC Switch 里那份写回客户端配置文件。改前的文件会留备份。" />
+                                </StackPanel>
+
+                                <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
+                                    <Run Text="“当前使用哪个供应商”本程序不碰 —— 那是你的选择，在 CC Switch 里选就行。" />
+                                </TextBlock>
                             </StackPanel>
                         </Border>
 
@@ -821,7 +853,15 @@
 
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel>
-                                <TextBlock Text="运行环境" Style="{StaticResource H1}" />
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <TextBlock Text="运行环境" FontSize="20" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextMain}" Margin="0" />
+                                    <Border Background="#FFF1C9" BorderBrush="#E8CC7A" BorderThickness="1"
+                                            CornerRadius="4" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center"
+                                            Visibility="{Binding SettingsDirty, Converter={StaticResource BoolToVis}}">
+                                        <TextBlock Text="有改动未保存" FontSize="11" Foreground="#7A5B00" />
+                                    </Border>
+                                </StackPanel>
                                 <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
                                     <Run Text="不知道填什么就点「自动探测」。探测不到再手动选。" />
                                 </TextBlock>
@@ -852,8 +892,7 @@
                                     <Button Content="自动探测" Style="{StaticResource PrimaryButton}"
                                             Click="AutoDetect_Click" />
                                     <Button Content="保存设置" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                            Command="{Binding SaveSettingsCommand}" />
-                                </StackPanel>
+                                            Command="{Binding SaveSettingsCommand}" />                                </StackPanel>
 
                                 <TextBlock Text="{Binding PathsHint}" Style="{StaticResource Sub}" Margin="0,12,0,0" />
 
@@ -897,10 +936,18 @@
 
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel>
-                                <TextBlock Text="网关参数" Style="{StaticResource H1}" />
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <TextBlock Text="网关参数" FontSize="20" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextMain}" Margin="0" />
+                                    <Border Background="#FFF1C9" BorderBrush="#E8CC7A" BorderThickness="1"
+                                            CornerRadius="4" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center"
+                                            Visibility="{Binding SettingsDirty, Converter={StaticResource BoolToVis}}">
+                                        <TextBlock Text="有改动未保存" FontSize="11" Foreground="#7A5B00" />
+                                    </Border>
+                                </StackPanel>
 
                                 <TextBlock Text="端口（默认 8787，被占用了就改成 8788 之类）" Style="{StaticResource Field}" />
-                                <TextBox Text="{Binding Port, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxWidth="200"
+                                <TextBox Text="{Binding Port, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" MaxWidth="200"
                                          HorizontalAlignment="Left" MinWidth="200" />
 
                                 <TextBlock Text="版本" Style="{StaticResource Field}" Margin="0,12,0,3" />
@@ -908,17 +955,30 @@
                                           MaxWidth="240" HorizontalAlignment="Left" MinWidth="240" />
 
                                 <TextBlock Text="API Key（客户端要填的口令，本机自用，随便设）" Style="{StaticResource Field}" Margin="0,12,0,3" />
-                                <TextBox Text="{Binding ApiKey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxWidth="420"
+                                <TextBox Text="{Binding ApiKey, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" MaxWidth="420"
                                          HorizontalAlignment="Left" MinWidth="420" />
 
                                 <TextBlock Text="登录文件路径（留空 = 自动探测，一般不用填）" Style="{StaticResource Field}" Margin="0,12,0,3" />
-                                <TextBox Text="{Binding AuthFile, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                <TextBox Text="{Binding AuthFile, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                          MaxWidth="620" HorizontalAlignment="Left" MinWidth="620" />
 
-                                <TextBlock Style="{StaticResource Sub}" Margin="0,14,0,0">
-                                    <Run Text="改完参数要点「保存」，然后重新「启动网关」才生效。" />
+                                <!-- 保存按钮就在这张卡片里，不再让人往上找 -->
+                                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                    <Button Content="保存设置" Style="{StaticResource PrimaryButton}"
+                                            Command="{Binding SaveSettingsCommand}" MinWidth="110" />
+                                    <Button Content="恢复默认" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                            Command="{Binding ResetSettingsCommand}"
+                                            ToolTip="把端口 / API Key / 路径恢复成默认值，并保存" />
+                                </StackPanel>
+
+                                <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,12,0,0">
+                                    <TextBlock Text="{Binding SettingsDirtyHint}" Style="{StaticResource Sub}"
+                                               FontSize="12.5" TextWrapping="Wrap" />
+                                </Border>
+                                <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
+                                    <Run Text="别的开关（托盘常驻、开机自启、自动刷新）改了就是即时生效，不用点保存。" />
                                     <LineBreak />
-                                    <Run Text="设置存在 %APPDATA%\WorkBuddyPanel\settings.json ，和 workbuddy_api 自己的配置互不干扰。" />
+                                    <Run Text="设置存在 %APPDATA%\WorkBuddyPanel\settings.json，和 workbuddy_api 自己的配置互不干扰。" />
                                 </TextBlock>
                             </StackPanel>
                         </Border>
@@ -974,7 +1034,6 @@
                     <TextBlock Text="{Binding StatusDetail}" Style="{StaticResource Sub}"
                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                 </StackPanel>
-
                 <StackPanel Grid.Column="1" Orientation="Horizontal"
                             Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}">
                     <TextBlock Text="{Binding BusyText}" Style="{StaticResource Sub}" VerticalAlignment="Center"
