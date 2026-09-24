@@ -1,8 +1,19 @@
 # BuddyDeck
 
+[![platform](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows)](#环境要求)
+[![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet)](#环境要求)
+[![Node](https://img.shields.io/badge/Node-20.10%2B-5FA04E?logo=nodedotjs)](#环境要求)
+[![deps](https://img.shields.io/badge/dependencies-0-brightgreen)](#两块东西)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![gateway tests](https://img.shields.io/badge/gateway%20tests-39%20passed-brightgreen)](workbuddy_api/scripts/verify.mjs)
+[![protocols](https://img.shields.io/badge/protocols-3-blueviolet)](#四个客户端怎么接)
+
 **把 WorkBuddy 桌面 App 里的账号，变成你自己的本地 AI 网关。**
 
 多账号、自动签到、自动续期、四种协议、Windows 图形界面 —— 目标机器上什么都不用装。
+
+> 网关部分（`workbuddy_api/`）来自 [**znahovo**](https://github.com/znahovo)，
+> 本项目在其之上做了扩展 —— 详见 [致谢](#致谢)。
 
 ```
 Claude Code ─┐
@@ -25,7 +36,7 @@ pi          ─┘
 
 ---
 
-## 三块东西
+## 两块东西
 
 | 目录 | 是什么 | 谁写的 |
 |---|---|---|
