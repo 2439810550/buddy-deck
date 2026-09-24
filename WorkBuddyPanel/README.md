@@ -156,30 +156,54 @@ Claude Code 报的 `claude-*`、Codex 报的 `gpt-*` 在 WorkBuddy 花名册里�
 
 ## 怎么跑
 
-### 方式一：直接双击（推荐）
+### 方式一：做成安装包发给别人（推荐）
 
-已经发布好了：
+```bash
+cd D:\workfandaiapi\WorkBuddyPanel
+powershell -ExecutionPolicy Bypass -File make-installer.ps1
+```
+
+产物：`dist\BuddyDeck-Setup-1.0.0.exe`，**发给别人就这一个文件**。
+
+对方双击 → 下一步 → 完事。**不需要装 .NET，也不需要装 Node** —— 两个运行时都在包里。
+
+| | 大小 |
+|---|---|
+| 免安装文件夹 `publish.next\` | 233 MB |
+| **安装包 `dist\BuddyDeck-Setup-*.exe`** | **68 MB**（LZMA2 压到 29%） |
+
+需要先装 [Inno Setup 6](https://jrsoftware.org/isdl.php)：`winget install JRSoftware.InnoSetup`
+
+安装包的行为：
+
+- 按用户装到 `%LOCALAPPDATA%\Programs\BuddyDeck`，**不弹 UAC**
+- 可选项：桌面快捷方式、开机自动启动（写 HKCU 的 Run 键，指向 `--tray`）
+- 卸载时清掉自带的运行时和开机自启项；
+  **账号数据（`~\.workbuddy-api`）和界面设置（`%APPDATA%\WorkBuddyPanel`）不动** —— 那是用户自己的东西
+
+重新出版本：
+
+```bash
+powershell -ExecutionPolicy Bypass -File make-installer.ps1 -Version 1.0.1
+powershell -ExecutionPolicy Bypass -File make-installer.ps1 -SkipBuild   # 只重打安装包
+```
+
+### 方式二：直接双击免安装版
 
 ```
-D:\workfandaiapi\WorkBuddyPanel\publish\WorkBuddyPanel.exe
+publish.next\WorkBuddyPanel.exe
 ```
 
-首次打开会自动找 `node.exe` 和 `workbuddy_api` 目录，并读一次账号信息。
-路径没找对的话，去「设置」标签页点「自动探测」。
+整个文件夹拷走就能跑（已自带 Node）。适合放 U 盘里随身带。
 
-### 方式二：从源码运行
+### 方式三：从源码运行
 
 ```bash
 cd D:\workfandaiapi\WorkBuddyPanel
 dotnet run -c Release
 ```
 
-### 方式三：重新打包成一个 exe
-
-```bash
-cd D:\workfandaiapi\WorkBuddyPanel
-dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
-```
+（这种方式需要机器上装了 Node，因为没走打包流程、没有 `runtime\`。）
 
 ---
 
