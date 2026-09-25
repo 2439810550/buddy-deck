@@ -48,3 +48,6 @@ dist/
 
 # BuddyDeckHub 不进这个仓库（含管理密钥等敏感文件）
 BuddyDeckHub/
+
+# new-api 试用目录（132MB 二进制 + 运行时数据，含真 key）
+_newapi/
