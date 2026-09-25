@@ -58,7 +58,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 
 OutputDir=dist
-OutputBaseFilename={#AppName}-Setup-{#AppVersion}
+#ifndef OutputSuffix
+  #define OutputSuffix ""
+#endif
+OutputBaseFilename={#AppName}-Setup-{#AppVersion}{#OutputSuffix}
 Compression=lzma2/max
 SolidCompression=yes
 LZMAUseSeparateProcess=yes
@@ -117,8 +120,8 @@ chinese.AutoStartProgram=自动启动:
 chinese.AddonHostProgramNotFound=%1 没有安装在您所选择的文件夹中。%n%n是否仍要继续？
 
 [Messages]
-chinese.WelcomeLabel2=即将把 [name] 安装到你的电脑。%n%n它是一个本机小工具：把 WorkBuddy 桌面 App 里的账号变成本地 AI 网关，然后 Claude Code、Codex、pi 这些工具就能用上它的模型。%n%n它自带了运行环境，你不需要额外安装 .NET 或 Node。设置和账号数据都保存在你自己的用户目录里，卸载不会删。
-chinese.FinishedLabel=安装完成。%n%n第一次打开会自动检测环境、读取账号。界面上的「一键接入」能帮你把 Claude Code / Codex / pi 的配置写好 —— 改之前会备份，随时能还原。
+chinese.WelcomeLabel2=即将把 [name] 安装到你的电脑。%n%n它是一个本机小工具：把 WorkBuddy 桌面 App 里的账号变成本地 AI 网关，然后 Claude Code、Codex、pi 这些工具就能用上它的模型。%n%n它自带了运行环境，你不需要额外安装 .NET 或 Node。设置和账号数据都保存在你自己的用户目录里，卸载不会删。%n%n【这是一个授权版本】装好后第一次打开会显示一串「机器码」，把它发给发卡人，收到 license.lic 后放进程序目录就能用了。
+chinese.FinishedLabel=安装完成。%n%n第一次打开会显示你的机器码 —— 把它发给发卡人，收到授权文件后放进程序目录即可。%n%n授权通过后，「一键接入」能帮你把 Claude Code / Codex / pi 的配置写好 —— 改之前会备份，随时能还原。
 
 [Code]
 { 开机自启：写当前用户的 Run 键，指向 --tray（静默进托盘）。

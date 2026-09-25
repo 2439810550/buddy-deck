@@ -29,12 +29,50 @@ namespace MakeLicense;
 /// </summary>
 public static class Program
 {
-    /// <summary>私钥文件的默认位置。</summary>
-    private static readonly string KeyDir =
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "keys");
+    /// <summary>
+    /// 密钥目录。
+    ///
+    /// **和图形版（tools/license-tool）用同一套逻辑** —— 两个工具读写同一份密钥，
+    /// 用哪个签出来的授权都能验。
+    ///
+    ///     首选  %USERPROFILE%\.workbuddy-license\
+    ///     兼容  从 exe 往上找 keys/（旧位置，仓库开发时用的）
+    ///
+    /// 为什么不写死相对路径：`..\..\..\..\..\keys` 是绑在目录结构上的 ——
+    /// 换个地方跑、换台机器就找不到了。密钥是**你个人的东西**，
+    /// 不该跟 exe 绑在一起。
+    /// </summary>
+    private static readonly string PreferredKeyDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".workbuddy-license");
 
-    private static string PrivateKeyPath => Path.Combine(Path.GetFullPath(KeyDir), "private.key");
-    private static string PublicKeyPath => Path.Combine(Path.GetFullPath(KeyDir), "public.key");
+    private static string? _resolvedKeyDir;
+
+    private static string KeyDir
+    {
+        get
+        {
+            if (_resolvedKeyDir is not null) return _resolvedKeyDir;
+
+            // 首选位置
+            if (File.Exists(Path.Combine(PreferredKeyDir, "private.key")))
+                return _resolvedKeyDir = PreferredKeyDir;
+
+            // 兼容旧位置：从 exe 往上找
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
+            {
+                var c = Path.Combine(dir.FullName, "keys");
+                if (File.Exists(Path.Combine(c, "private.key")))
+                    return _resolvedKeyDir = c;
+            }
+
+            return _resolvedKeyDir = PreferredKeyDir;
+        }
+    }
+
+    private static string PrivateKeyPath => Path.Combine(KeyDir, "private.key");
+    private static string PublicKeyPath => Path.Combine(KeyDir, "public.key");
 
     public static int Main(string[] args)
     {

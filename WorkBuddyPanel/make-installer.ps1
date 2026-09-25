@@ -1,4 +1,4 @@
-<#
+﻿<#
     一键做出可以发给别人的安装包。
 
     做两步：
@@ -16,7 +16,10 @@
 param(
     [string]$Version = "1.0.0",
     [string]$NodeVersion = "22.23.3",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    # 从哪个目录取料。默认 publish.next（普通版），
+    # 出授权版传 -Source publish.licensed。
+    [string]$Source = "publish.next"
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,14 +57,14 @@ Write-Host "  ISCC: $iscc" -ForegroundColor DarkGray
 # ── 1) 免安装文件夹 ───────────────────────────────────────────
 if ($SkipBuild) {
     Step "1/2  跳过编译（-SkipBuild）"
-    if (-not (Test-Path (Join-Path $root "publish.next\WorkBuddyPanel.exe"))) {
-        Fail "publish.next 里没有 WorkBuddyPanel.exe，没法打安装包。去掉 -SkipBuild 先编译。"
+    if (-not (Test-Path (Join-Path $root (Join-Path $Source "WorkBuddyPanel.exe")))) {
+        Fail "$Source 里没有 WorkBuddyPanel.exe，没法打安装包。去掉 -SkipBuild 先编译。"
     }
 } else {
     Step "1/2  编译 + 打免安装文件夹"
     # 输出到 publish.next —— 不用碰正在运行的 publish\
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "build.ps1") `
-        -NodeVersion $NodeVersion -Output "publish.next"
+        -NodeVersion $NodeVersion -Output $Source
     if ($LASTEXITCODE -ne 0) { Fail "build.ps1 失败" }
 }
 
@@ -76,15 +79,19 @@ if (-not (Test-Path $iss)) { Fail "找不到 installer.iss" }
 $dist = Join-Path $root "dist"
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-# 版本号通过命令行覆盖，不用改文件
-& $iscc "/DAppVersion=$Version" $iss
+# 产物名区分版本：授权版加 -Licensed 后缀。
+# 这样普通版和授权版可以各自打包，不会互相覆盖，也不会认错文件。
+$suffix = if ($Source -like "*licensed*") { "-Licensed" } else { "" }
+
+# 版本号 + 源目录 + 产物后缀，都通过命令行覆盖，不用改文件
+& $iscc "/DAppVersion=$Version" "/DSourceDir=$Source" "/DOutputSuffix=$suffix" $iss
 if ($LASTEXITCODE -ne 0) { Fail "ISCC 编译失败" }
 
-$out = Join-Path $dist "BuddyDeck-Setup-$Version.exe"
+$out = Join-Path $dist "BuddyDeck-Setup-$Version$suffix.exe"
 if (-not (Test-Path $out)) { Fail "编译报成功但找不到产物：$out" }
 
 $zip = [math]::Round((Get-Item $out).Length / 1MB, 1)
-$folder = [math]::Round(((Get-ChildItem (Join-Path $root "publish.next") -Recurse -File |
+$folder = [math]::Round(((Get-ChildItem (Join-Path $root $Source) -Recurse -File |
     Measure-Object -Property Length -Sum).Sum) / 1MB, 1)
 
 Write-Host ""

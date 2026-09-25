@@ -25,7 +25,6 @@ public partial class ActivationWindow : Window
         _result = result;
 
         MachineCodeText.Text = MachineId.Current;
-        PathText.Text = LicenseGuard.LicensePath;
 
         // 按失败类型给不同的话术
         TitleText.Text = result.FailReason switch
@@ -46,8 +45,7 @@ public partial class ActivationWindow : Window
         var lines = comps.Select(kv => $"{kv.Key,-12}{kv.Value}");
         ComponentsText.Text = string.Join(Environment.NewLine, lines);
 
-        // 复制按钮的反馈
-        CopyButton_Clicked += (_, _) => { };
+        // 复制按钮的反馈直接在 Copy_Click 里处理，这里不再单独挂事件
 
         // 回车 = 重新检查（用户放好文件后不用找按钮）
         KeyDown += (_, e) =>
@@ -58,8 +56,6 @@ public partial class ActivationWindow : Window
             }
         };
     }
-
-    private event EventHandler? CopyButton_Clicked;
 
     /// <summary>校验通过后由外面读这个值。</summary>
     public LicenseGuard.Result? Passed { get; private set; }

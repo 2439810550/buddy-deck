@@ -1,0 +1,261 @@
+<Window x:Class="LicenseTool.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="WorkBuddy 发卡工具"
+        Width="720" Height="760"
+        MinWidth="680" MinHeight="700"
+        WindowStartupLocation="CenterScreen"
+        Background="#F6F7F9"
+        FontFamily="Microsoft YaHei UI">
+
+    <!--
+        布局注意（踩过的坑）：
+
+        1. 按钮**不写死宽度** —— 中文按 MinWidth + 自适应，125% DPI 下
+           "打开程序所在目录" 这类 8 字文字会被截断。
+
+        2. 不用 Expander 装中文标题 —— 它的 header 默认高度 24px，
+           装不下 12px 中文字的行高，底部会被切掉。
+
+        3. 窗口允许调整大小 —— 不同 DPI、不同系统字体设置下
+           同样的像素数看起来不一样，写死尺寸会"显示不全"。
+    -->
+
+    <Window.Resources>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="#E4E7EC"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="18,16"/>
+            <Setter Property="Margin" Value="0,0,0,14"/>
+        </Style>
+
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#1F2328"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+        </Style>
+
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="#6B7280"/>
+            <Setter Property="Margin" Value="0,0,0,5"/>
+        </Style>
+
+        <Style x:Key="Input" TargetType="TextBox">
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Background" Value="#F6F7F9"/>
+            <Setter Property="BorderBrush" Value="#E4E7EC"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+
+        <Style x:Key="PrimaryButton" TargetType="Button">
+            <Setter Property="Background" Value="#2563EB"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="MinHeight" Value="38"/>
+            <Setter Property="Padding" Value="18,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+
+        <Style x:Key="GhostButton" TargetType="Button">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="Foreground" Value="#1F2328"/>
+            <Setter Property="BorderBrush" Value="#E4E7EC"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="Padding" Value="14,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="22,20,22,18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ══ 顶部：标题 + 密钥状态 ══ -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,16">
+            <TextBlock Text="WorkBuddy 发卡工具" FontSize="20" FontWeight="SemiBold"
+                       Foreground="#1F2328"/>
+            <TextBlock Text="给用户的机器签发授权文件。这个工具持有私钥，不要发给任何人。"
+                       FontSize="12" Foreground="#6B7280" Margin="0,6,0,0"/>
+        </StackPanel>
+
+        <!-- ══ 主体（可滚动）══ -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
+
+                <!-- 密钥 -->
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="密钥" Style="{StaticResource SectionTitle}"/>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Ellipse Grid.Column="0" Width="8" Height="8" Margin="0,0,9,0"
+                                     VerticalAlignment="Center">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Fill" Value="#D97706"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsEnabled, ElementName=IssueButton}"
+                                                         Value="True">
+                                                <Setter Property="Fill" Value="#16A34A"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
+
+                            <TextBlock Grid.Column="1" x:Name="KeyStatusText"
+                                       FontSize="12.5" VerticalAlignment="Center"
+                                       Foreground="#D97706" TextWrapping="Wrap"/>
+                        </Grid>
+
+                        <TextBlock x:Name="KeyPathText" FontSize="11" FontFamily="Consolas"
+                                   Foreground="#9CA3AF" Margin="17,6,0,0" TextWrapping="Wrap"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,13,0,0">
+                            <Button x:Name="GenerateKeyButton" Content="生成密钥对"
+                                    Click="GenerateKey_Click"
+                                    Style="{StaticResource PrimaryButton}"
+                                    MinWidth="130" Margin="0,0,9,0"/>
+                            <!-- 只在用旧位置的密钥时显示。故意用黄色（警告色），
+                                 而不是跟其它按钮一样的样式 —— 它是个待办事项，不是普通操作。 -->
+                            <Button x:Name="MigrateButton" Content="搬到用户目录"
+                                    Click="Migrate_Click"
+                                    Visibility="Collapsed"
+                                    MinWidth="140" Margin="0,0,9,0"
+                                    MinHeight="38" Padding="16,0"
+                                    Cursor="Hand"
+                                    Background="#FFF8E6" Foreground="#8A6100"
+                                    BorderBrush="#FFE1A3" BorderThickness="1"/>
+                            <Button x:Name="CopyPublicKeyButton" Content="复制公钥"
+                                    Click="CopyPublicKey_Click"
+                                    Style="{StaticResource GhostButton}"
+                                    MinWidth="100"/>
+                        </StackPanel>
+
+                        <TextBox x:Name="PublicKeyBox" Margin="0,12,0,0"
+                                 FontSize="10.5" FontFamily="Consolas"
+                                 Background="#F6F7F9" BorderBrush="#E4E7EC" BorderThickness="1"
+                                 Foreground="#6B7280" TextWrapping="Wrap"
+                                 IsReadOnly="True" MaxHeight="70"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Text="（生成密钥对后，这里会显示公钥，要贴进主程序的 LicenseGuard.cs）"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- 签发 -->
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="签发授权" Style="{StaticResource SectionTitle}"/>
+
+                        <TextBlock Text="机器码" Style="{StaticResource FieldLabel}"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBox Grid.Column="0" x:Name="MachineBox"
+                                     Style="{StaticResource Input}"
+                                     FontFamily="Consolas" FontSize="14"
+                                     Text=""/>
+
+                            <Button Grid.Column="1" Content="粘贴"
+                                    Click="Paste_Click"
+                                    Style="{StaticResource GhostButton}"
+                                    MinWidth="72" Margin="9,0,0,0"/>
+                        </Grid>
+
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="授权给（名字）" Style="{StaticResource FieldLabel}"/>
+                                <TextBox x:Name="NameBox" Style="{StaticResource Input}" Text=""/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="2" Margin="14,0,0,0">
+                                <TextBlock Text="有效天数" Style="{StaticResource FieldLabel}"/>
+                                <TextBox x:Name="DaysBox" Style="{StaticResource Input}" Text="365"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <CheckBox x:Name="PerpetualCheck" Content="永久授权（不设到期时间）"
+                                  Checked="Perpetual_Changed" Unchecked="Perpetual_Changed"
+                                  Margin="0,14,0,0" FontSize="12.5"
+                                  Foreground="#1F2328"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                            <Button x:Name="IssueButton" Content="签发并保存"
+                                    Click="Issue_Click"
+                                    Style="{StaticResource PrimaryButton}"
+                                    MinWidth="150" Margin="0,0,9,0"/>
+                            <Button Content="清空"
+                                    Click="Clear_Click"
+                                    Style="{StaticResource GhostButton}"
+                                    MinWidth="80"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- 本次会话已签 -->
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,10">
+                            <TextBlock Text="本次会话已签" Style="{StaticResource SectionTitle}"
+                                       Margin="0"/>
+                            <Button Content="清空记录" Click="ClearPending_Click"
+                                    HorizontalAlignment="Right"
+                                    Style="{StaticResource GhostButton}"
+                                    MinWidth="90" MinHeight="30"/>
+                        </Grid>
+
+                        <TextBlock x:Name="PendingHint" FontSize="11.5"
+                                   Foreground="#9CA3AF" TextWrapping="Wrap"
+                                   Margin="0,0,0,8"/>
+
+                        <DataGrid x:Name="PendingList"
+                                  AutoGenerateColumns="True"
+                                  IsReadOnly="True"
+                                  HeadersVisibility="Column"
+                                  GridLinesVisibility="Horizontal"
+                                  HorizontalGridLinesBrush="#F2F4F6"
+                                  Background="Transparent"
+                                  BorderThickness="0"
+                                  RowBackground="Transparent"
+                                  FontSize="12"
+                                  MaxHeight="150"/>
+                    </StackPanel>
+                </Border>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- ══ 底部提示 ══ -->
+        <Border Grid.Row="2" Background="#FFF8E6" BorderBrush="#FFE1A3"
+                BorderThickness="1" CornerRadius="8" Padding="13,10" Margin="0,4,0,0">
+            <TextBlock FontSize="11.5" Foreground="#8A6100" TextWrapping="Wrap"
+                       Text="私钥在 keys/private.key，已在 .gitignore 里排除。它丢了签不了新授权，泄露了别人能自己签 —— 备份到密码管理器或离线介质。"/>
+        </Border>
+    </Grid>
+</Window>

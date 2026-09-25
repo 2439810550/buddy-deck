@@ -11,3 +11,7 @@ keys/private.key
 
 # 签出来的授权文件（含用户姓名，属于个人信息）
 *.lic
+
+# 发卡工具的密钥（现在默认在 %USERPROFILE%\.workbuddy-license\，
+# 这个规则是防万一有人手工拷到项目目录里）
+.workbuddy-license/

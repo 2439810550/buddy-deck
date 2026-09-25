@@ -97,9 +97,16 @@ public static class LicenseGuard
 
         if (!File.Exists(path))
         {
+            // 提示里**不写绝对路径**。
+            //
+            // 用户把程序装到哪都能把文件放到 exe 旁边，写死一个
+            // D:\... 只会误导（而且那可能是开发机的路径）。
+            // 需要具体位置时点「打开程序所在目录」。
             return new Result(false, Reason.NoLicenseFile,
-                $"没有找到授权文件。\n\n应该放在：\n{path}\n\n" +
-                $"你的机器码是：\n{MachineId.Current}\n\n" +
+                "没有找到授权文件。\n\n" +
+                "把收到的 license.lic 放到本程序所在目录" +
+                "（也就是和 WorkBuddyPanel.exe 放一起）。\n\n" +
+                "你的机器码是：\n" + MachineId.Current + "\n\n" +
                 "把这个机器码发给作者，会收到一个 license.lic。",
                 null);
         }
