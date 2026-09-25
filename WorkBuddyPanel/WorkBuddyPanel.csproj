@@ -26,4 +26,30 @@
     <Using Remove="System.Drawing" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      授权校验。用现成的库，不自己写。
+
+      选它而不是手搓签名的原因：密钥格式、XML 序列化边界、时间篡改、
+      签名算法的坑太多，这个库有 240 万下载量，这些边界都被踩平了。
+    -->
+    <PackageReference Include="Standard.Licensing" Version="1.3.0" />
+    <!-- 取机器码要查 WMI（主板 UUID / CPU ID）。 -->
+    <PackageReference Include="System.Management" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      tools/ 下面是一个独立的发卡工具（有自己的 csproj）。
+
+      不排掉的话，主项目的通配符会把里面的 Program.cs 也拉进来 ——
+      然后报「定义了多个入口点」，而且那个文件需要的 using 主项目里没有。
+      （踩过：一堆 CS0103 说 Path/File 不存在，其实是在拿 WPF 的编译环境编控制台代码）
+    -->
+    <Compile Remove="tools/**" />
+    <None Remove="tools/**" />
+    <Page Remove="tools/**" />
+    <ApplicationDefinition Remove="tools/**" />
+  </ItemGroup>
+
 </Project>

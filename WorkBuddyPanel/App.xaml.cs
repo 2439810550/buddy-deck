@@ -61,9 +61,48 @@ public partial class App : Application
         // 这个坑真踩到了 —— 现在仍然保留了第二层保险（已有实例会补跑维护）。
         if (MaintainOnly)
         {
+            // 维护模式也校验授权。
+            //
+            // 为什么：不校验的话，删掉授权文件后计划任务照样每天续期签到 ——
+            // 那是我们自己的账号，等于给人白用工信。
+            //
+            // 但失败时**静默退出（退出码 1）**，不弹窗：
+            // 这是计划任务拉起来的，屏幕前没人，弹窗只会挂着不走。
+            var gate = LicenseGuard.Verify();
+            if (!gate.Ok)
+            {
+                MainViewModel.WriteMaintenanceLog(
+                    $"[授权] {gate.FailReason}：{gate.Message.Replace(Environment.NewLine, " ")}");
+                Shutdown(1);
+                return;
+            }
+
             RunMaintenanceOnly();
             return;
         }
+
+        // 授权校验：插在 --maintain 之后、单实例之前。
+        //
+        // 时机考虑：
+        //   在单实例之前 —— 没授权就别抢那个互斥量，否则第二次双击的行为会很怪
+        //                        （没授权的实例把已授权的窗口叫出来）
+        //   在 --maintain 之后 —— 那个分支自己处理，见上面
+        var license = LicenseGuard.Verify();
+        if (!license.Ok)
+        {
+            // 弹激活窗：告诉用户机器码 + 文件放哪 + 可重试
+            var activation = new ActivationWindow(license);
+            if (activation.ShowDialog() != true)
+            {
+                Shutdown(1);
+                return;
+            }
+            license = activation.Passed!;
+        }
+
+        MainViewModel.WriteMaintenanceLog(
+            $"[授权] 通过 —— 授权给 {license.CustomerName}，到期 " +
+            (license.ExpiresAt is { } exp && exp != default ? $"{exp:yyyy-MM-dd}" : "永久"));
 
         // 单实例：程序大部分时间躲在托盘里，用户很容易忘了它还在，
         // 再双击一次 exe 就会撞端口。这里让第二个实例把第一个的窗口叫出来，然后自己退。
