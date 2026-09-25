@@ -33,6 +33,7 @@ import { beginSse, createModelResolver } from "./protocol.js";
 import { RateLimitTracker, describeRateLimit, isRateLimited, pickFallbackModel } from "./ratelimit.js";
 import * as anthropic from "./anthropic.js";
 import * as responses from "./responses.js";
+import { recordUsage } from "./usage.js";
 
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
@@ -202,10 +203,50 @@ function sanitizeChunk(payload) {
   }
   const usage = chunk["usage"];
   if (typeof usage === "object" && usage !== null && !Array.isArray(usage)) {
+    // 记账要用的字段先**拷一份**。
+    //
+    // ⚠ 必须是拷贝，不能直接 lastUsage = usage ——
+    // 下面那个 delete 循环会把 credit / 缓存字段从同一个对象上删掉，
+    // 连带把账本里的 credit 也弄丢了。（踩过：账本只有 token 没有 credit）
+    lastUsage = { ...usage };
     const keep = ["prompt_tokens", "completion_tokens", "total_tokens"];
     for (const key of Object.keys(usage)) if (!keep.includes(key)) delete usage[key];
   }
   return JSON.stringify(chunk);
+}
+
+/**
+ * 当前请求的 usage 快照。
+ *
+ * 为什么用模块级变量：sanitizeChunk 是纯函数，改成带状态会污染它的语义。
+ * 而这个网关是**单进程单请求串行处理流**的（SSE 是一条一条推的），
+ * 同一时刻只有一个流在写，所以这个变量在「读取时刻」是对的。
+ * 读取发生在流结束时，紧接着就清空，不会串到下一个请求。
+ */
+let lastUsage = null;
+
+/** 从一个 SSE 分片里把 usage 抠出来（不改动分片本身）。 */
+function captureUsage(payload) {
+  if (typeof payload !== "string") return;
+  // 快筛：没有 usage 的分片直接跳过，避免每个 token 都 JSON.parse
+  if (!payload.includes('"usage"')) return;
+  try {
+    const chunk = JSON.parse(payload);
+    const usage = chunk?.["usage"];
+    if (typeof usage === "object" && usage !== null) lastUsage = { ...usage };
+  } catch {
+    // 分片不是完整 JSON 就跳过
+  }
+}
+
+/**
+ * 账号标记 —— 记账里用来区分是哪个号。
+ *
+ * 只取 uid 前 8 位：既能区分账号，又不会把完整凭据标识写进账本。
+ */
+function accountTag(credential) {
+  const raw = credential?.["uid"] ?? credential?.["id"] ?? "";
+  return typeof raw === "string" && raw.length >= 8 ? raw.slice(0, 8) : "";
 }
 
 /**
@@ -421,6 +462,7 @@ export function createGateway(options) {
     }
 
     const request = parsed.request;
+    const startedAt = Date.now();
     const resolved = resolveModel(request["model"]);
     const ctx = {
       model: resolved.model,
@@ -464,6 +506,11 @@ export function createGateway(options) {
     if (!wantsStream) {
       const completion = await collectChatCompletion(result.response);
       writeJson(res, 200, adapter.fromCompletion(completion, ctx));
+      void recordUsage({
+        model: ctx.requestedModel, usedModel, kind: adapter.name, account: accountTag(credential),
+        usage: completion?.["usage"], outcome: "ok", attempts: attempts.length,
+        elapsedMs: Date.now() - startedAt,
+      });
       return;
     }
 
@@ -472,9 +519,17 @@ export function createGateway(options) {
     try {
       for await (const payload of iterateSseData(result.response.body)) {
         if (payload === "[DONE]") break;
+        // 记账要用的 usage（含 credit）在 rename 之前先抠出来
+        captureUsage(payload);
         writer.push(renameChunkModel(payload, usedModel));
       }
       writer.finish();
+      void recordUsage({
+        model: ctx.requestedModel, usedModel, kind: adapter.name, account: accountTag(credential),
+        usage: lastUsage, outcome: "ok", attempts: attempts.length,
+        elapsedMs: Date.now() - startedAt,
+      });
+      lastUsage = null;
     } catch (error) {
       log(`[${adapter.name}] stream failed mid-flight: ${String(error)}`);
       writer.fail(error);
@@ -500,6 +555,10 @@ export function createGateway(options) {
     const wantsStream = request["stream"] === true;
     const controller = new AbortController();
     req.on("close", () => controller.abort());
+
+    // 记账用：客户端请求的模型名 + 这次请求的起点
+    const requestedModel = String(request["model"] ?? "");
+    const startedAt = Date.now();
 
     const resolvedModel = resolveModel(request["model"]);
     const { result, model: usedModel, attempts } = await sendWithFallback({
@@ -530,6 +589,11 @@ export function createGateway(options) {
         completion["model"] = usedModel;
       }
       writeJson(res, 200, completion);
+      void recordUsage({
+        model: requestedModel, usedModel, kind: "chat", account: accountTag(credential),
+        usage: completion?.["usage"], outcome: "ok", attempts: attempts.length,
+        elapsedMs: Date.now() - startedAt,
+      });
       return;
     }
 
@@ -547,16 +611,30 @@ export function createGateway(options) {
           res.write("data: [DONE]\n\n");
           break;
         }
+        // 记账要的 usage（含上游的 credit）在 sanitize 丢掉之前先抠一份
+        captureUsage(payload);
         const sanitized = sanitizeChunk(renameChunkModel(payload, usedModel));
         if (sanitized === undefined) continue;
         res.write(`data: ${sanitized}\n\n`);
       }
+      void recordUsage({
+        model: requestedModel, usedModel, kind: "chat", account: accountTag(credential),
+        usage: lastUsage, outcome: "ok", attempts: attempts.length,
+        elapsedMs: Date.now() - startedAt,
+      });
+      lastUsage = null;
     } catch (error) {
       if (!res.writableEnded) {
         log(`stream failed mid-flight: ${String(error)}`);
         res.write(`data: ${JSON.stringify({ error: { message: String(error), type: "upstream_stream_error" } })}\n\n`);
         res.write("data: [DONE]\n\n");
       }
+      void recordUsage({
+        model: requestedModel, usedModel, kind: "chat", account: accountTag(credential),
+        usage: lastUsage, outcome: "failed", attempts: attempts.length,
+        elapsedMs: Date.now() - startedAt,
+      });
+      lastUsage = null;
     } finally {
       if (!res.writableEnded) res.end();
     }

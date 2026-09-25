@@ -48,6 +48,7 @@ import {
   sealAccounts,
   suggestedFileName,
 } from "./transfer.js";
+import { aggregate, ledgerPath, parseLedger } from "./usage.js";
 
 const VERSION = "0.1.0";
 const SCHEMA_VERSION = 1;
@@ -266,6 +267,107 @@ async function primeCatalog({ client, catalog, store, router }) {
 }
 
 /** `status` — sign-in, credit, catalog provenance. */
+/**
+ * `usage` —— 看用量账本。
+ *
+ * 数据来自 usage.jsonl，每次调用记一行，里面有上游给的 `credit`
+ * （这次请求真实扣了多少积分，输入价/输出价/缓存折扣都已经算进去了）。
+ *
+ * 用法：
+ *     workbuddy-api usage                 按模型汇总
+ *     workbuddy-api usage --by account    按账号汇总
+ *     workbuddy-api usage --days 7        只看最近 7 天
+ *     workbuddy-api usage --json          输出 JSON（给脚本用）
+ */
+async function commandUsage(flags) {
+  const { readFile, stat } = await import("node:fs/promises");
+  const path = ledgerPath();
+
+  let text;
+  try {
+    await stat(path);
+    text = await readFile(path, "utf8");
+  } catch {
+    process.stdout.write(`账本还没有内容。\n每调一次模型就会记一行：${path}\n`);
+    return 0;
+  }
+
+  let entries = parseLedger(text);
+
+  const days = Number(flags["days"] ?? 0);
+  if (Number.isFinite(days) && days > 0) {
+    const cutoff = Date.now() - days * 86_400_000;
+    entries = entries.filter((e) => (e["ts"] ?? 0) >= cutoff);
+  }
+
+  if (entries.length === 0) {
+    process.stdout.write("这个时间范围内没有记录。\n");
+    return 0;
+  }
+
+  const agg = aggregate(entries);
+
+  if (flags["json"] === true) {
+    process.stdout.write(JSON.stringify(agg, null, 2) + "\n");
+    return 0;
+  }
+
+  const n = (v) => (v === null || v === undefined ? "-" : String(v));
+
+  const scope = days > 0 ? `（最近 ${days} 天）` : "";
+  process.stdout.write(`\n账本：${entries.length} 条记录` + scope + "\n");
+  process.stdout.write(`位置：${path}\n\n`);
+
+  const t = agg.totals;
+  process.stdout.write("── 合计 ──\n");
+  const failNote = t.failures ? `（失败 ${t.failures}）` : "";
+  process.stdout.write(`  调用        ${t.calls}` + failNote + "\n");
+  process.stdout.write(`  积分        ${t.credit.toFixed(4)}\n`);
+  process.stdout.write(`  tokens      入 ${t.promptTokens} / 出 ${t.completionTokens} = ${t.tokens}\n`);
+
+  if (t.cacheHit + t.cacheMiss > 0) {
+    const rate = t.cacheHitRate !== null ? `（${(t.cacheHitRate * 100).toFixed(1)}%）` : "";
+    process.stdout.write(`  缓存命中    ${t.cacheHit} / ${t.cacheHit + t.cacheMiss}` + rate + "\n");
+  }
+  if (t.tokensPerCredit) {
+    process.stdout.write(`  换算        1 积分 ≈ ${t.tokensPerCredit} tokens\n`);
+  }
+  process.stdout.write("\n");
+
+  const byAccount = flags["by"] === "account";
+  const rows = byAccount ? agg.byAccount : agg.byModel;
+  const label = byAccount ? "账号" : "模型";
+
+  process.stdout.write(byAccount ? "── 按账号 ──\n" : "── 按模型 ──\n");
+  process.stdout.write("  " + label.padEnd(22) +
+    "调用".padStart(6) + "积分".padStart(12) +
+    "tokens".padStart(10) + "积分/千tok".padStart(12) + "命中率".padStart(9) + "\n");
+  process.stdout.write("  " + "─".repeat(72) + "\n");
+
+  for (const r of rows) {
+    const hit = r.cacheHitRate !== null ? (r.cacheHitRate * 100).toFixed(0) + "%" : null;
+    process.stdout.write("  " + (byAccount ? r.account : r.model).padEnd(22) +
+      String(r.calls).padStart(6) +
+      r.credit.toFixed(3).padStart(12) +
+      String(r.tokens).padStart(10) +
+      n(r.creditPerKToken).padStart(12) +
+      n(hit).padStart(9) + "\n");
+  }
+  process.stdout.write("\n");
+
+  const paid = rows.filter((r) => r.credit > 0);
+  if (paid.length > 0) {
+    process.stdout.write("── 定价参考 ──\n");
+    for (const r of paid) {
+      const hit = r.cacheHitRate ? `　（缓存命中 ${(r.cacheHitRate * 100).toFixed(0)}%）` : "";
+      process.stdout.write(`  ${r.model.padEnd(24)} 1 积分 ≈ ${n(r.tokensPerCredit)} tokens` + hit + "\n");
+    }
+    process.stdout.write("\n");
+  }
+
+  return 0;
+}
+
 async function commandStatus(flags, config) {
   const context = await makeContext(flags, config);
   const { variant, client, store, router, catalog } = context;
@@ -1378,7 +1480,7 @@ async function run(argv) {
     return 0;
   }
 
-  const known = ["serve", "status", "models", "doctor", "logout", "config", "accounts", "checkin", "ccswitch"];
+  const known = ["serve", "status", "models", "doctor", "logout", "config", "accounts", "checkin", "ccswitch", "usage"];
   if (!known.includes(command)) {
     process.stderr.write(`workbuddy-api: expected ${known.join(", ")}; got ${JSON.stringify(command)}\n`);
     return 1;
@@ -1405,6 +1507,8 @@ async function run(argv) {
         return await commandCheckin(flags, config);
       case "ccswitch":
         return await commandCcSwitch(flags);
+      case "usage":
+        return await commandUsage(flags);
       default:
         printHelp();
         return 1;
