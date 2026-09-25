@@ -15,3 +15,7 @@ keys/private.key
 # 发卡工具的密钥（现在默认在 %USERPROFILE%\.workbuddy-license\，
 # 这个规则是防万一有人手工拷到项目目录里）
 .workbuddy-license/
+
+# 发卡工具的发布产物（138MB，自己 dotnet publish 就能出）
+# 源码在 tools/license-tool/，产物不进库
+发卡工具/

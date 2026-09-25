@@ -132,10 +132,19 @@ dotnet run --project tools/make-license -- --gen
 
 **或者用图形版：**
 
+```powershell
+# 先发布一个自包含版（双击即用，不需要装 .NET）
+cd WorkBuddyPanel/tools/license-tool
+dotnet publish -c Release -r win-x64 --self-contained true `
+  -p:PublishSingleFile=true -p:DebugType=none -o ../../发卡工具
 ```
-双击 tools/license-tool/bin/Release/发卡工具.exe
+
+```
+双击 WorkBuddyPanel/发卡工具/发卡工具.exe
 点「生成密钥对」→ 设口令 → 复制公钥 → 贴进 LicenseGuard.cs
 ```
+
+（发布产物不进 git —— 138MB，需要时自己 publish 一下就行。源码在 `tools/license-tool/`）
 
 **之后每发一张卡：**
 
