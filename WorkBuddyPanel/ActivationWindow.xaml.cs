@@ -62,10 +62,17 @@ public partial class ActivationWindow : Window
 
     private void Copy_Click(object sender, RoutedEventArgs e)
     {
-        try
+        // 用带重试的版本 —— 剪贴板被输入法/微信/截图工具短暂独占时
+        // 直接 SetText 会抛 COMException，用户看到"复制失败"但什么都没干。
+        if (ClipboardHelper.TrySetText(MachineId.Current))
         {
-            Clipboard.SetText(MachineId.Current);
             CopyButton.Content = "已复制";
+
+            // 顺便把焦点给机器码框并全选 ——
+            // 用户复制成功后想手动核对，或想再 Ctrl+C 一次都方便。
+            MachineCodeText.Focus();
+            MachineCodeText.SelectAll();
+
             // 1.6 秒后恢复，给用户一个可见的回执
             var timer = new System.Windows.Threading.DispatcherTimer
             {
@@ -78,10 +85,17 @@ public partial class ActivationWindow : Window
             };
             timer.Start();
         }
-        catch
+        else
         {
-            MessageBox.Show(this, "复制失败，请手动选中那串机器码。", "复制",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            // 重试 5 次都失败：把焦点给输入框并全选，
+            // 用户按 Ctrl+C 就能拿到 —— 比只丢一句"复制失败"有用。
+            MachineCodeText.Focus();
+            MachineCodeText.SelectAll();
+
+            MessageBox.Show(this,
+                "剪贴板被别的程序占住了，自动复制没成功。\n\n" +
+                "机器码已经选中，按 Ctrl+C 复制。",
+                "请手动复制", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }
 
@@ -89,12 +103,15 @@ public partial class ActivationWindow : Window
     {
         try
         {
-            // 打开 exe 所在目录并选中授权文件（不存在就只打开目录）
+            // 打开 exe 所在目录。
+            //
+            // 有授权文件的话顺便选中它（不管叫什么名字），
+            // 没的话就只打开目录 —— 用户放文件时能直接看到放哪。
             var dir = AppContext.BaseDirectory;
-            var file = LicenseGuard.LicensePath;
+            var existing = LicenseGuard.CandidatePaths().FirstOrDefault();
 
-            if (File.Exists(file))
-                Process.Start("explorer.exe", $"/select,\"{file}\"");
+            if (existing is not null)
+                Process.Start("explorer.exe", $"/select,\"{existing}\"");
             else
                 Process.Start("explorer.exe", $"\"{dir}\"");
         }

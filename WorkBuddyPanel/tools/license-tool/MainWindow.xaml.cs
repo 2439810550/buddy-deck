@@ -260,16 +260,19 @@ public partial class MainWindow : Window
             return;
         }
 
-        try
+        // 剪贴板被别的程序占着时会抛 COMException，重试几次基本都能成功
+        if (ClipboardHelper.TrySetText(text))
         {
-            Clipboard.SetText(text);
             MessageBox.Show(this, "公钥已复制。", "复制成功",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
-        catch
+        else
         {
-            MessageBox.Show(this, "复制失败，请手动选中。", "复制",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            // 全试完还失败：退到手动选中
+            PublicKeyBox.Focus();
+            PublicKeyBox.SelectAll();
+            MessageBox.Show(this, "剪贴板被占住了。公钥已经选中，按 Ctrl+C 复制。",
+                "请手动复制", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }
 
@@ -312,7 +315,13 @@ public partial class MainWindow : Window
             var dialog = new Microsoft.Win32.SaveFileDialog
             {
                 Title = "保存授权文件",
+                //
+                // 文件名带用户信息，方便发卡方区分（一次发多个人的时候尤其有用）。
+                //
+                // 主程序不挑名字 —— 它会扫 exe 目录下所有 .lic，逐个验签。
+                // 所以叫什么都行，这里只负责起个能看懂的名字。
                 FileName = $"license-{name}-{machineId[..8]}.lic",
+                DefaultExt = ".lic",
                 Filter = "授权文件 (*.lic)|*.lic|所有文件 (*.*)|*.*",
                 InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
             };
@@ -320,6 +329,13 @@ public partial class MainWindow : Window
             if (dialog.ShowDialog(this) != true) return;
 
             File.WriteAllText(dialog.FileName, xml, new UTF8Encoding(false));
+
+            // 如果后缀不是 .lic，提醒一句 —— 程序只扫 .lic
+            var finalExt = Path.GetExtension(dialog.FileName);
+            var extWarn = finalExt.Equals(".lic", StringComparison.OrdinalIgnoreCase)
+                ? ""
+                : $"\n\n⚠ 后缀是 {finalExt}，程序只认 .lic 文件。\n" +
+                  "   发给用户前改成 .lic。";
 
             // 记进待签清单（方便一次发多个）
             _pending.Add(new PendingItem(machineId, name, periodText));
@@ -329,9 +345,11 @@ public partial class MainWindow : Window
                 $"✓ 已生成：\n{dialog.FileName}\n\n" +
                 $"    机器码  {machineId}\n" +
                 $"    授权给  {name}\n" +
-                $"    有效期  {periodText}\n\n" +
-                "把这个文件发给用户，让他改名成 license.lic，放到程序目录里。\n\n" +
-                "继续签下一个吗？（会清空输入框）",
+                $"    有效期  {periodText}\n" +
+                "\n" +
+                "把这个文件发给用户，让他直接放进程序目录（文件名不用改）。" +
+                extWarn +
+                "\n\n继续签下一个吗？（会清空输入框）",
                 "签发成功", MessageBoxButton.YesNo, MessageBoxImage.Information);
 
             if (next == MessageBoxResult.Yes)
@@ -401,14 +419,8 @@ public partial class MainWindow : Window
 
     private void Paste_Click(object sender, RoutedEventArgs e)
     {
-        try
-        {
-            if (Clipboard.ContainsText())
-            {
-                MachineBox.Text = Clipboard.GetText().Trim().ToUpperInvariant();
-            }
-        }
-        catch { /* 剪贴板被别的进程占着，忽略 */ }
+        var text = ClipboardHelper.TryGetText();
+        if (text is not null) MachineBox.Text = text.Trim().ToUpperInvariant();
     }
 
     // ══════════════════════════════════════════════════════════

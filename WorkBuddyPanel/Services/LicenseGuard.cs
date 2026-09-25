@@ -56,8 +56,71 @@ public static class LicenseGuard
         "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEeTwhcrLx0JJrjh6GjExVsat43PR1H/pe9Y2pMmS4R3Cs+/" +
         "JXaBmtYALPgVJ9zxcFrTPsHcuviF+T0OEnl/Za3g==";
 
-    /// <summary>授权文件名。放在 exe 同目录。</summary>
+    /// <summary>
+    /// 推荐的授权文件名。
+    ///
+    /// **不强制** —— 校验时会扫目录里所有 .lic 文件，逐个验签。
+    /// 这个名字只是发卡工具的建议默认值，用户改成什么都能用。
+    ///
+    /// 为什么不写死：用户拿到 license-张三-A1B2C3D4.lic，
+    /// 他凭什么知道要改名？改完名还要提心吊胆是不是改坏了。
+    /// 而且他要是有多个授权（比如又给同事买了一个），只有一个名字反而麻烦。
+    /// </summary>
     public const string LicenseFileName = "license.lic";
+
+    /// <summary>
+    /// 扫描 exe 同目录下的授权文件，返回**第一个验签通过的**。
+    ///
+    /// ## 匹配规则
+    ///
+    ///   1. 优先看 license.lic（如果有）
+    ///   2. 然后看其它 *.lic，**按文件名排序**（保证结果稳定，不会这次认这个下次
+    ///      认那个）
+    ///   3. 逐个验签，第一个通过的就用它
+    ///
+    /// 非 .lic 后缀的文件不扫 —— 避免把用户的文档（恰好是 XML）读进来。
+    /// 程序目录里一般不会有别的 .lic，但万一有，验签不过就跳过。
+    ///
+    /// ## 为什么按「验签通过」而不是「文件名对」
+    ///
+    /// 验签通过 = 这个文件确实是我们签发的、且没被改过。
+    /// 这比文件名可靠得多 —— 文件名可以随便改，签名改不了。
+    /// </summary>
+    public static IEnumerable<string> CandidatePaths()
+    {
+        var dir = AppContext.BaseDirectory;
+
+        // 1) 首选名字
+        var preferred = Path.Combine(dir, LicenseFileName);
+        if (File.Exists(preferred)) yield return preferred;
+
+        // 2) 其它 .lic
+        string[] others;
+        try
+        {
+            others = Directory.GetFiles(dir, "*.lic", SearchOption.TopDirectoryOnly);
+        }
+        catch
+        {
+            yield break;
+        }
+
+        Array.Sort(others, StringComparer.OrdinalIgnoreCase);
+        foreach (var f in others)
+        {
+            if (string.Equals(f, preferred, StringComparison.OrdinalIgnoreCase)) continue;
+            yield return f;
+        }
+    }
+
+    /// <summary>
+    /// 推荐位置（界面上告知用户放哪、以及方便发卡工具知道丢哪）。
+    ///
+    /// ⚠ 校验**不依赖**这个路径 —— 它只是个建议。
+    /// 真正用的是 {@link CandidatePaths} 扫出来的结果。
+    /// </summary>
+    public static string LicensePath =>
+        Path.Combine(AppContext.BaseDirectory, LicenseFileName);
 
     /// <summary>机器码在授权文件里的字段名。</summary>
     public const string MachineIdFeature = "MachineId";
@@ -81,34 +144,55 @@ public static class LicenseGuard
         BadFile,
     }
 
-    /// <summary>授权文件的完整路径（exe 同目录）。</summary>
-    public static string LicensePath =>
-        Path.Combine(AppContext.BaseDirectory, LicenseFileName);
-
     /// <summary>
     /// 校验。
     ///
     /// 这个方法**不抛异常**，所有失败都通过返回值表达 ——
     /// 调用方（启动流程）永远能拿到一句能显示给用户的话。
+    ///
+    /// **会扫目录下所有 .lic 文件逐个验签**，不要求特定文件名。
     /// </summary>
     public static Result Verify()
     {
-        var path = LicensePath;
+        var candidates = CandidatePaths().ToList();
+
+        if (candidates.Count == 0)
+        {
+            return new Result(false, Reason.NoLicenseFile,
+                "没有找到授权文件。\n\n" +
+                "把收到的授权文件放到本程序所在目录" +
+                "（也就是和 WorkBuddyPanel.exe 放一起）。\n" +
+                "文件名不用改，什么名字都行。\n\n" +
+                "你的机器码是：\n" + MachineId.Current + "\n\n" +
+                "把这个机器码发给作者，会收到一个授权文件。",
+                null);
+        }
+
+        // 记住验签失败的第一个文件的错误 —— 全都不过的话，
+        // 拿它当提示比笼统说"没有授权文件"有用。
+        Result? firstFailure = null;
+
+        foreach (var path in candidates)
+        {
+            var result = VerifyFile(path);
+            if (result.Ok) return result;
+            firstFailure ??= result;
+        }
+
+        // 一个都没过：返回第一个失败的原因（通常是机器码不匹配或签名无效）
+        return firstFailure!;
+    }
+
+    /// <summary>验一个具体的文件。</summary>
+    private static Result VerifyFile(string path)
+    {
 
         if (!File.Exists(path))
         {
-            // 提示里**不写绝对路径**。
-            //
-            // 用户把程序装到哪都能把文件放到 exe 旁边，写死一个
-            // D:\... 只会误导（而且那可能是开发机的路径）。
-            // 需要具体位置时点「打开程序所在目录」。
+            // 理论上不会走到这里（CandidatePaths 已经过滤了），
+            // 但并发删除之类的边界情况留个兼容。
             return new Result(false, Reason.NoLicenseFile,
-                "没有找到授权文件。\n\n" +
-                "把收到的 license.lic 放到本程序所在目录" +
-                "（也就是和 WorkBuddyPanel.exe 放一起）。\n\n" +
-                "你的机器码是：\n" + MachineId.Current + "\n\n" +
-                "把这个机器码发给作者，会收到一个 license.lic。",
-                null);
+                "授权文件不见了：" + Path.GetFileName(path), null);
         }
 
         string xml;

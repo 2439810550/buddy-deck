@@ -62,11 +62,37 @@
 
                     <Border Grid.Column="0" Background="#F6F7F9" BorderBrush="#E4E7EC"
                             BorderThickness="1" CornerRadius="8" Padding="14,13" MinHeight="48">
-                        <TextBlock x:Name="MachineCodeText"
-                                   FontSize="18" FontWeight="SemiBold"
-                                   FontFamily="Consolas" Foreground="#2563EB"
-                                   Text="________________"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <!--
+                            TextBox 而不是 TextBlock：
+
+                            TextBlock 在 WPF 里 **不能选中**（不是可编辑控件）。
+                            用户想手动复制的时候选不中文字，只能靠旁边的按钮 ——
+                            而按钮万一因为剪贴板被占而失败，就彻底没辄了。
+
+                            换成只读 TextBox：能选中、能 Ctrl+C、能右键复制，
+                            而且外观通过模板做得跟原来一样（无边框、透明背景）。
+                        -->
+                        <TextBox x:Name="MachineCodeText"
+                                 FontSize="18" FontWeight="SemiBold"
+                                 FontFamily="Consolas" Foreground="#2563EB"
+                                 Text="________________"
+                                 IsReadOnly="True"
+                                 IsReadOnlyCaretVisible="False"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 Cursor="IBeam"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Center"
+                                 HorizontalContentAlignment="Center"
+                                 Padding="0">
+                            <TextBox.Template>
+                                <ControlTemplate TargetType="TextBox">
+                                    <ScrollViewer x:Name="PART_ContentHost"
+                                                  VerticalAlignment="Center"
+                                                  Focusable="False"/>
+                                </ControlTemplate>
+                            </TextBox.Template>
+                        </TextBox>
                     </Border>
 
                     <!-- MinWidth 76：两个中文字 + 左右各 18 内边距，够宽不会挤 -->
@@ -91,12 +117,13 @@
             <StackPanel>
                 <TextBlock FontSize="12.5" Foreground="#3B5A8A"
                            TextWrapping="Wrap" LineHeight="20"
-                           Text="收到授权文件后，把它改名成 license.lic，放到本程序所在目录。"/>
+                           Text="收到授权文件后，直接放到本程序所在目录（文件名不用改）。"/>
 
                 <TextBlock Margin="0,8,0,0" FontSize="12" Foreground="#6B7280"
                            TextWrapping="Wrap" LineHeight="19">
                     也就是和 <Run Text="WorkBuddyPanel.exe" FontFamily="Consolas"/> 放一起。
-                    不知道在哪就点下面的按钮，会直接给你打开。
+                    什么文件名都行，不用改。
+                    不知道目录在哪就点下面的按钮，会直接给你打开。
                 </TextBlock>
 
                 <!-- MinWidth 170：8 个中文字在 12.5px 下约 100px，留足余量 -->

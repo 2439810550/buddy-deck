@@ -171,6 +171,8 @@ public static class Program
 
         var to = GetOption(args, "--to") ?? "用户";
         var edition = GetOption(args, "--edition") ?? "pro";
+        // 文件名带机器码，方便区分。
+        // 主程序不挑名字 —— 它会扫 exe 目录下所有 .lic，逐个验签。
         var outPath = GetOption(args, "--out") ?? $"license-{machineId}.lic";
 
         var (expiresAt, ok) = ResolveExpiry(args);
