@@ -589,8 +589,70 @@
                                             ToolTip="刷新全部账号的积分和签到状态" />
                                 </StackPanel>
 
-                                <ItemsControl ItemsSource="{Binding Accounts}">
-                                    <ItemsControl.ItemTemplate>
+<!--
+                                账号列表。
+                                
+                                用 ListBox 而不是 ItemsControl：
+                                
+                                ItemsControl 在 WPF 里不做虚拟化 —— 它为每个数据项都创建视觉元素。
+                                17 个账号 × 每行约 30 个控件 = 500 多个元素全部一次性渲染。
+                                账号越多越卡。
+                                
+                                ListBox 默认带 VirtualizingStackPanel：只为可见的 8~10 行创建元素，
+                                滚动时复用。50 个账号和 5 个账号的开销一样。
+                                
+                                CanContentScroll 必须为 True —— 默认的平滑滚动会让虚拟化失效。
+                                ScrollUnit=Pixel 让滚轮按像素走（手感接近浏览器）。
+                                -->
+                                <ListBox x:Name="AccountList"
+                                         ItemsSource="{Binding Accounts}"
+                                         BorderThickness="0"
+                                         Background="Transparent"
+                                         Padding="0"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         ScrollViewer.CanContentScroll="True"
+                                         VirtualizingStackPanel.IsVirtualizing="True"
+                                         VirtualizingStackPanel.VirtualizationMode="Recycling"
+                                         VirtualizingStackPanel.ScrollUnit="Pixel">
+                                    <!-- 行样式：去掉 ListBoxItem 默认的选中高亮，换成想要的样子 -->
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="Padding" Value="0" />
+                                            <Setter Property="Margin" Value="0" />
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="ListBoxItem">
+                                                        <!--
+                                                            Background 要给 Transparent。
+                                
+                                                            背景为 null 的元素不参与命中测试 —— 鼠标落在它上面时，
+                                                            滚轮事件不会被接住，滚动链条就断了。
+                                                            表现是「鼠标悬在账号上滚不动，挪到旁边才能滚」。
+                                                        -->
+                                                        <Border x:Name="Row"
+                                                                Background="Transparent"
+                                                                BorderBrush="{StaticResource Line}"
+                                                                BorderThickness="0,0,0,1"
+                                                                Padding="10,11"
+                                                                CornerRadius="4">
+                                                            <ContentPresenter HorizontalAlignment="Stretch" />
+                                                        </Border>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="Row" Property="Background" Value="#F8FAFC" />
+                                                            </Trigger>
+                                                            <Trigger Property="IsSelected" Value="True">
+                                                                <Setter TargetName="Row" Property="Background" Value="#F0F6FF" />
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                    <ListBox.ItemTemplate>
                                         <DataTemplate>
                                             <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="0,12">
                                                 <Grid>
@@ -712,8 +774,8 @@
                                                 </Grid>
                                             </Border>
                                         </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
 
                                 <TextBlock Style="{StaticResource Sub}" Margin="0,14,0,0"
                                            Visibility="{Binding HasNoAccounts, Converter={StaticResource BoolToVis}}">
