@@ -19,7 +19,10 @@ param(
     [switch]$SkipBuild,
     # 从哪个目录取料。默认 publish.next（普通版），
     # 出授权版传 -Source publish.licensed。
-    [string]$Source = "publish.next"
+    [string]$Source = "publish.next",
+    # 产物文件名后缀。不传就按 Source 猜（licensed -> -Licensed，其它为空）。
+    # 想从 publish.licensed 出「不带后缀」的正式发布版就传 -Suffix ""。
+    [string]$Suffix = "__auto__"
 )
 
 $ErrorActionPreference = "Stop"
@@ -81,7 +84,13 @@ New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
 # 产物名区分版本：授权版加 -Licensed 后缀。
 # 这样普通版和授权版可以各自打包，不会互相覆盖，也不会认错文件。
-$suffix = if ($Source -like "*licensed*") { "-Licensed" } else { "" }
+$suffix = if ($Suffix -ne "__auto__") {
+    $Suffix
+} elseif ($Source -like "*licensed*") {
+    "-Licensed"
+} else {
+    ""
+}
 
 # 版本号 + 源目录 + 产物后缀，都通过命令行覆盖，不用改文件
 & $iscc "/DAppVersion=$Version" "/DSourceDir=$Source" "/DOutputSuffix=$suffix" $iss
