@@ -451,138 +451,88 @@
             </TabItem>
 
             <!-- ══════════════ 账号 ══════════════ -->
-            <TabItem Header="  账号  ">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="2">
-                    <StackPanel Margin="4,10,4,10">
-
-                        <Border Style="{StaticResource CardStyle}">
-                            <StackPanel>
-                                <TextBlock Text="多个 WorkBuddy 账号" Style="{StaticResource H1}" />
-                                <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
-                                    <Run Text="桌面 App 一次只能登一个号。点「导入当前账号」把现在登着的那个号存下来，" />
-                                    <LineBreak />
-                                    <Run Text="再去 App 里换号、回来再导入一次，就能攒出多个。网关用的是「网关正在用」那个号。" />
-                                    <LineBreak />
-                                    <Run Text="账号信息只存在本机你自己的用户目录里，不会上传，也不改动 App 自己的登录状态。" />
-                                </TextBlock>
-
-                                <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,0,0,14">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="网关当前使用：" Style="{StaticResource Sub}" FontSize="13"
-                                                   VerticalAlignment="Center" />
-                                        <TextBlock Text="{Binding ActiveAccountText}" FontSize="13" FontWeight="SemiBold"
-                                                   Foreground="{StaticResource Accent}" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Border>
-
-                                <StackPanel Orientation="Horizontal">
-                                    <Button Content="导入当前账号" Style="{StaticResource PrimaryButton}"
-                                            Command="{Binding ImportAccountCommand}" MinWidth="120" />
-                                    <Button Content="全部账号：续期 + 签到" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                            Command="{Binding CheckinAllCommand}" MinWidth="164"
-                                            ToolTip="对列表里全部账号发一次刷新请求（会把续期窗口推后），并且签到。已经签过的不会重复签。" />
-                                    <Button Content="全部账号：只续期" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                            Command="{Binding RenewAllCommand}" MinWidth="112"
-                                            ToolTip="对列表里全部账号发一次刷新请求，把登录有效期推后。不做签到。" />
-                                    <Button Content="刷新积分" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                            Command="{Binding RefreshAccountsCommand}"
-                                            ToolTip="重新读取每个账号的积分和签到状态（不发刷新请求，不消耗额度）" />
-                                    <Button Content="取消选定" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                            Command="{Binding ClearActiveAccountCommand}" />
-                                </StackPanel>
-
-                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                    <CheckBox Content="自动刷新积分" IsChecked="{Binding AccountsAutoRefresh, Mode=TwoWay}"
-                                              VerticalAlignment="Center" />
-                                    <TextBlock Text="{Binding AccountsRefreshText}" Style="{StaticResource Sub}"
-                                               Margin="10,0,0,0" VerticalAlignment="Center" />
-                                </StackPanel>
-
-                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                    <TextBlock Text="{Binding AccountsSummary}" Style="{StaticResource Sub}" />
-                                    <TextBlock Text="　·　上次刷新：" Style="{StaticResource Sub}" />
-                                    <TextBlock Text="{Binding AccountsFetchedAt}" Style="{StaticResource Sub}" />
-                                    <TextBlock Text="　·　「续期」= 重新拿一个满 60 天的登录有效期，不是重新扫登录。"
-                                               Style="{StaticResource Sub}" />
-                                </StackPanel>
+            <TabItem Header="  账号  " VerticalContentAlignment="Stretch">
+                <!--
+                    三行布局。
+                
+                      行 0  吸顶工具条（筛选 / 搜索 / 批量操作）—— 固定不动
+                      行 1  说明卡片（可滚动，但不常看）
+                      行 2  账号列表 —— 自己占满剩余空间、自己滚动
+                
+                    ## 为什么账号列表要单独占一行
+                
+                    以前它在行 1 那个 ScrollViewer 里，结果就是「鼠标停在账号上滚不动」：
+                
+                      - 外层 ScrollViewer 给内部无限高度，ListBox 以为内容永远装得下，
+                        于是自己的滚动条和虚拟化都失效
+                      - 滚轮事件两个滚动容器抢，谁也没接住
+                
+                    拎出来单独占一行之后，它拿到的是有限高度 —— 虚拟化生效、
+                    滚动条是自己的、没有争抢。
+                -->
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                
+                    <!-- ══ 吸顶工具条 ══ -->
+                    <Border Grid.Row="0" Background="#FBFCFD" BorderBrush="{StaticResource Line}"
+                            BorderThickness="0,0,0,1" Padding="12,9">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                
+                            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                <RadioButton Content="全部" GroupName="AcctFilter" Margin="0,0,4,0"
+                                             IsChecked="{Binding IsAllFilter, Mode=TwoWay}"
+                                             Style="{StaticResource FilterChip}" />
+                                <RadioButton Content="需要续期" GroupName="AcctFilter" Margin="0,0,4,0"
+                                             IsChecked="{Binding IsNeedsRenewFilter, Mode=TwoWay}"
+                                             Style="{StaticResource FilterChip}" />
+                                <RadioButton Content="今天没签" GroupName="AcctFilter" Margin="0,0,4,0"
+                                             IsChecked="{Binding IsNotCheckedInFilter, Mode=TwoWay}"
+                                             Style="{StaticResource FilterChip}" />
+                                <RadioButton Content="有问题" GroupName="AcctFilter"
+                                             IsChecked="{Binding IsProblemFilter, Mode=TwoWay}"
+                                             Style="{StaticResource FilterChip}" />
                             </StackPanel>
-                        </Border>
-
-                        <Border Style="{StaticResource CardStyle}">
-                            <StackPanel>
-                                <TextBlock Text="搬到另一台电脑" Style="{StaticResource H1}" />
-                                <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
-                                    <Run Text="把账号导出成一个加密文件，在另一台电脑导入就能接着用，不用重新扫码。" />
-                                    <LineBreak />
-                                    <Run Text="token 是服务端的，跟机器无关；导入时会真的刷一次来验证能不能用。" />
-                                </TextBlock>
-
-                                <StackPanel Orientation="Horizontal">
-                                    <Button Content="导出账号" Style="{StaticResource PrimaryButton}"
-                                            Command="{Binding ExportAccountsCommand}" MinWidth="110" />
-                                    <Button Content="导入账号" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                            Command="{Binding ImportAccountsCommand}" MinWidth="110" />
-                                </StackPanel>
-
-                                <Border Background="#FFF8E5" BorderBrush="#F0DCA8" BorderThickness="1"
-                                        CornerRadius="6" Padding="10,8" Margin="0,12,0,0">
-                                    <TextBlock Style="{StaticResource Sub}" Foreground="#7A5B00" FontSize="12">
-                                        <Run Text="导出文件里有 refreshToken，等同于账号密码：" FontWeight="SemiBold" />
-                                        <LineBreak />
-                                        <Run Text="· 口令忘了就解不开，只能重新扫码" />
-                                        <LineBreak />
-                                        <Run Text="· 文件 + 口令给了别人，等于把这些号的额度给了别人" />
-                                        <LineBreak />
-                                        <Run Text="· 导入完就把文件删掉，别留在微信 / 网盘里" />
-                                    </TextBlock>
-                                </Border>
-
-                                <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
-                                    <Run Text="换机器后别忘了在「一键接入」页再点一次「全部配置」—— 客户端配置是指向本机网关的，那边 10 秒就能重配。" />
-                                </TextBlock>
+                
+                            <TextBox Grid.Column="1" MinWidth="150" MaxWidth="240"
+                                     HorizontalAlignment="Left" Margin="14,0,14,0"
+                                     VerticalContentAlignment="Center"
+                                     Style="{StaticResource SearchBox}"
+                                     Text="{Binding AccountSearch, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="按名字或 UID 过滤" />
+                
+                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                <TextBlock Text="{Binding AccountFilterSummary}" Style="{StaticResource Sub}"
+                                           VerticalAlignment="Center" Margin="0,0,12,0" />
+                                <Button Content="全部续期" Style="{StaticResource GhostButton}" MinHeight="30"
+                                        Command="{Binding RenewAllCommand}"
+                                        ToolTip="给所有账号续期（不签到）" />
+                                <Button Content="全部签到" Style="{StaticResource GhostButton}" MinHeight="30" Margin="6,0,0,0"
+                                        Command="{Binding CheckinAllCommand}"
+                                        ToolTip="给所有账号续期并签到" />
+                                <Button Content="↻" Style="{StaticResource IconButton}" Margin="6,0,0,0"
+                                        Command="{Binding RefreshAccountsCommand}"
+                                        ToolTip="刷新全部账号的积分和签到状态" />
                             </StackPanel>
-                        </Border>
-
-                        <Border Style="{StaticResource CardStyle}">
-                            <StackPanel>
-                                <TextBlock Text="登录不会过期（自动续期）" Style="{StaticResource H1}" />
-                                <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
-                                    <Run Text="WorkBuddy 的登录是滑动窗口：accessToken 活 55 天，refreshToken 活 60 天，" />
-                                    <LineBreak />
-                                    <Run Text="但服务端每次刷新都会重新发一个满额 60 天的 refreshToken。" />
-                                    <LineBreak />
-                                    <Run Text="所以在 60 天窗口内刷一次，就又能续 60 天 —— 只要不断，就永远不用再扫码。" />
-                                </TextBlock>
-
-                                <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,0,0,12">
-                                    <TextBlock Text="{Binding TaskStatus}" Style="{StaticResource Sub}" FontSize="13" />
-                                </Border>
-
-                                <StackPanel Orientation="Horizontal">
-                                    <Button Content="注册每日自动续期" Style="{StaticResource PrimaryButton}"
-                                            Command="{Binding RegisterTaskCommand}" MinWidth="140" />
-                                    <Button Content="立即跑一次" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                            Command="{Binding RunTaskNowCommand}" />
-                                    <Button Content="删除任务" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
-                                            Command="{Binding RemoveTaskCommand}" />
-                                </StackPanel>
-
-                                <TextBlock Style="{StaticResource Sub}" Margin="0,12,0,0">
-                                    <Run Text="注册后会在系统的计划任务里加一条每天 12:00 的任务：" />
-                                    <LineBreak />
-                                    <Run Text="静默运行，不弹窗，跑完续期和签到就自己退出。" />
-                                    <LineBreak />
-                                    <Run Text="电脑到点没开机也没事 —— 任务会在下次开机后自动补跑。" />
-                                    <LineBreak />
-                                    <Run Text="就算不注册，程序每次启动时也会检查一遍：登录快到期就静默续一次。" />
-                                    <Run Text="就算不注册这个任务，程序每次启动时也会自己检查：窗口不够就静默续一遍。" />
-                                </TextBlock>
-                            </StackPanel>
-                        </Border>
-
-                        <Border Style="{StaticResource CardStyle}">
-                            <StackPanel>
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        </Grid>
+                    </Border>
+                
+                    <!-- ══ 说明卡片（可滚动，但不常看）══ -->
+                        <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="6,8,6,12">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
                                     <TextBlock Text="账号列表" Style="{StaticResource H1}" Margin="0" />
                                     <Button Content="↻" Style="{StaticResource IconButton}" Margin="10,0,0,0"
                                             Command="{Binding RefreshAccountsCommand}"
@@ -604,7 +554,7 @@
                                 CanContentScroll 必须为 True —— 默认的平滑滚动会让虚拟化失效。
                                 ScrollUnit=Pixel 让滚轮按像素走（手感接近浏览器）。
                                 -->
-                                <ListBox x:Name="AccountList"
+                                <ListBox x:Name="AccountList" Grid.Row="1"
                                          ItemsSource="{Binding Accounts}"
                                          BorderThickness="0"
                                          Background="Transparent"
@@ -781,41 +731,183 @@
                                            Visibility="{Binding HasNoAccounts, Converter={StaticResource BoolToVis}}">
                                     <Run Text="还没有账号。先确保 WorkBuddy 桌面 App 登录着，再点上面的「导入当前账号」。" />
                                 </TextBlock>
-                            </StackPanel>
+                            </Grid>
                         </Border>
 
-                        <Border Style="{StaticResource CardStyle}"
-                                Visibility="{Binding HasAccountsResult, Converter={StaticResource BoolToVis}}">
-                            <StackPanel>
-                                <TextBlock Text="操作结果" Style="{StaticResource H1}" />
-                                <Border Background="#F6F8FA" CornerRadius="6" Padding="12,10">
-                                    <TextBlock Text="{Binding AccountsResult}" TextWrapping="Wrap"
-                                               FontSize="12" FontFamily="Consolas, Microsoft YaHei UI" />
-                                </Border>
-                            </StackPanel>
-                        </Border>
+                        <!-- ══ 使用说明（默认收起，需要时展开）══ -->
+                        <Expander Grid.Row="2" Margin="6,0,6,12"
+                                  Background="White"
+                                  BorderBrush="{StaticResource Line}" BorderThickness="1"
+                                  Padding="4" IsExpanded="False">
+                            <Expander.Header>
+                                <TextBlock Text="使用说明（账号从哪来 / 怎么搬机器 / 怎么自动续期）"
+                                           FontSize ="13" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextMain}"
+                                           Margin="10,8,0,8" />
+                            </Expander.Header>
+                            <StackPanel Margin="6,4,6,8">
+                        <StackPanel Margin="4,10,4,10">
 
-                        <Border Style="{StaticResource CardStyle}">
-                            <StackPanel>
-                                <TextBlock Text="签到是怎么做的" Style="{StaticResource H1}" />
-                                <TextBlock Style="{StaticResource Sub}">
-                                    <Run Text="用的是客户端自己的接口：POST /v2/billing/meter/checkin-activity-status （查）" />
-                                    <LineBreak />
-                                    <Run Text="和 POST /v2/billing/meter/daily-checkin（签）。" />
-                                    <LineBreak /><LineBreak />
-                                    <Run Text="点「全部签到」会对每个账号先查后签：已经签过的不会重复请求，" />
-                                    <LineBreak />
-                                    <Run Text="已经过期的令牌会先自动刷新再签。签到得到的积分直接进对应账号。" />
-                                    <LineBreak /><LineBreak />
-                                    <Run Text="想每天自动签：在「设置」里勾上开机自启，然后在这里就能手动一键签；" />
-                                    <LineBreak />
-                                    <Run Text="或者命令行跑 workbuddy-api checkin。" />
-                                </TextBlock>
-                            </StackPanel>
-                        </Border>
+                            <Border Style="{StaticResource CardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="多个 WorkBuddy 账号" Style="{StaticResource H1}" />
+                                    <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
+                                        <Run Text="桌面 App 一次只能登一个号。点「导入当前账号」把现在登着的那个号存下来，" />
+                                        <LineBreak />
+                                        <Run Text="再去 App 里换号、回来再导入一次，就能攒出多个。网关用的是「网关正在用」那个号。" />
+                                        <LineBreak />
+                                        <Run Text="账号信息只存在本机你自己的用户目录里，不会上传，也不改动 App 自己的登录状态。" />
+                                    </TextBlock>
 
-                    </StackPanel>
-                </ScrollViewer>
+                                    <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,0,0,14">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="网关当前使用：" Style="{StaticResource Sub}" FontSize="13"
+                                                       VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding ActiveAccountText}" FontSize="13" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource Accent}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="导入当前账号" Style="{StaticResource PrimaryButton}"
+                                                Command="{Binding ImportAccountCommand}" MinWidth="120" />
+                                        <Button Content="全部账号：续期 + 签到" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                Command="{Binding CheckinAllCommand}" MinWidth="164"
+                                                ToolTip="对列表里全部账号发一次刷新请求（会把续期窗口推后），并且签到。已经签过的不会重复签。" />
+                                        <Button Content="全部账号：只续期" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                Command="{Binding RenewAllCommand}" MinWidth="112"
+                                                ToolTip="对列表里全部账号发一次刷新请求，把登录有效期推后。不做签到。" />
+                                        <Button Content="刷新积分" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                Command="{Binding RefreshAccountsCommand}"
+                                                ToolTip="重新读取每个账号的积分和签到状态（不发刷新请求，不消耗额度）" />
+                                        <Button Content="取消选定" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                Command="{Binding ClearActiveAccountCommand}" />
+                                    </StackPanel>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                        <CheckBox Content="自动刷新积分" IsChecked="{Binding AccountsAutoRefresh, Mode=TwoWay}"
+                                                  VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding AccountsRefreshText}" Style="{StaticResource Sub}"
+                                                   Margin="10,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <TextBlock Text="{Binding AccountsSummary}" Style="{StaticResource Sub}" />
+                                        <TextBlock Text="　·　上次刷新：" Style="{StaticResource Sub}" />
+                                        <TextBlock Text="{Binding AccountsFetchedAt}" Style="{StaticResource Sub}" />
+                                        <TextBlock Text="　·　「续期」= 重新拿一个满 60 天的登录有效期，不是重新扫登录。"
+                                                   Style="{StaticResource Sub}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource CardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="搬到另一台电脑" Style="{StaticResource H1}" />
+                                    <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
+                                        <Run Text="把账号导出成一个加密文件，在另一台电脑导入就能接着用，不用重新扫码。" />
+                                        <LineBreak />
+                                        <Run Text="token 是服务端的，跟机器无关；导入时会真的刷一次来验证能不能用。" />
+                                    </TextBlock>
+
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="导出账号" Style="{StaticResource PrimaryButton}"
+                                                Command="{Binding ExportAccountsCommand}" MinWidth="110" />
+                                        <Button Content="导入账号" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                Command="{Binding ImportAccountsCommand}" MinWidth="110" />
+                                    </StackPanel>
+
+                                    <Border Background="#FFF8E5" BorderBrush="#F0DCA8" BorderThickness="1"
+                                            CornerRadius="6" Padding="10,8" Margin="0,12,0,0">
+                                        <TextBlock Style="{StaticResource Sub}" Foreground="#7A5B00" FontSize="12">
+                                            <Run Text="导出文件里有 refreshToken，等同于账号密码：" FontWeight="SemiBold" />
+                                            <LineBreak />
+                                            <Run Text="· 口令忘了就解不开，只能重新扫码" />
+                                            <LineBreak />
+                                            <Run Text="· 文件 + 口令给了别人，等于把这些号的额度给了别人" />
+                                            <LineBreak />
+                                            <Run Text="· 导入完就把文件删掉，别留在微信 / 网盘里" />
+                                        </TextBlock>
+                                    </Border>
+
+                                    <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
+                                        <Run Text="换机器后别忘了在「一键接入」页再点一次「全部配置」—— 客户端配置是指向本机网关的，那边 10 秒就能重配。" />
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource CardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="登录不会过期（自动续期）" Style="{StaticResource H1}" />
+                                    <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
+                                        <Run Text="WorkBuddy 的登录是滑动窗口：accessToken 活 55 天，refreshToken 活 60 天，" />
+                                        <LineBreak />
+                                        <Run Text="但服务端每次刷新都会重新发一个满额 60 天的 refreshToken。" />
+                                        <LineBreak />
+                                        <Run Text="所以在 60 天窗口内刷一次，就又能续 60 天 —— 只要不断，就永远不用再扫码。" />
+                                    </TextBlock>
+
+                                    <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,0,0,12">
+                                        <TextBlock Text="{Binding TaskStatus}" Style="{StaticResource Sub}" FontSize="13" />
+                                    </Border>
+
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="注册每日自动续期" Style="{StaticResource PrimaryButton}"
+                                                Command="{Binding RegisterTaskCommand}" MinWidth="140" />
+                                        <Button Content="立即跑一次" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                Command="{Binding RunTaskNowCommand}" />
+                                        <Button Content="删除任务" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
+                                                Command="{Binding RemoveTaskCommand}" />
+                                    </StackPanel>
+
+                                    <TextBlock Style="{StaticResource Sub}" Margin="0,12,0,0">
+                                        <Run Text="注册后会在系统的计划任务里加一条每天 12:00 的任务：" />
+                                        <LineBreak />
+                                        <Run Text="静默运行，不弹窗，跑完续期和签到就自己退出。" />
+                                        <LineBreak />
+                                        <Run Text="电脑到点没开机也没事 —— 任务会在下次开机后自动补跑。" />
+                                        <LineBreak />
+                                        <Run Text="就算不注册，程序每次启动时也会检查一遍：登录快到期就静默续一次。" />
+                                        <Run Text="就算不注册这个任务，程序每次启动时也会自己检查：窗口不够就静默续一遍。" />
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+
+                            <Border Style="{StaticResource CardStyle}"
+                                    Visibility="{Binding HasAccountsResult, Converter={StaticResource BoolToVis}}">
+                                <StackPanel>
+                                    <TextBlock Text="操作结果" Style="{StaticResource H1}" />
+                                    <Border Background="#F6F8FA" CornerRadius="6" Padding="12,10">
+                                        <TextBlock Text="{Binding AccountsResult}" TextWrapping="Wrap"
+                                                   FontSize="12" FontFamily="Consolas, Microsoft YaHei UI" />
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource CardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="签到是怎么做的" Style="{StaticResource H1}" />
+                                    <TextBlock Style="{StaticResource Sub}">
+                                        <Run Text="用的是客户端自己的接口：POST /v2/billing/meter/checkin-activity-status （查）" />
+                                        <LineBreak />
+                                        <Run Text="和 POST /v2/billing/meter/daily-checkin（签）。" />
+                                        <LineBreak /><LineBreak />
+                                        <Run Text="点「全部签到」会对每个账号先查后签：已经签过的不会重复请求，" />
+                                        <LineBreak />
+                                        <Run Text="已经过期的令牌会先自动刷新再签。签到得到的积分直接进对应账号。" />
+                                        <LineBreak /><LineBreak />
+                                        <Run Text="想每天自动签：在「设置」里勾上开机自启，然后在这里就能手动一键签；" />
+                                        <LineBreak />
+                                        <Run Text="或者命令行跑 workbuddy-api checkin。" />
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                        </StackPanel>
+                            </StackPanel>
+                        </Expander>
+            </Grid>
             </TabItem>
 
             <!-- ══════════════ 对话 ══════════════ -->
