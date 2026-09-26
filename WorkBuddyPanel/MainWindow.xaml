@@ -271,12 +271,12 @@
                                     <Run Text="本程序与腾讯、WorkBuddy、DeepSeek 均无关联，未获其授权或认可；" />
                                     <Run Text="文中出现的名称仅用于描述兼容关系，商标权利归各自所有。" />
                                     <LineBreak /><LineBreak />
-                                    <Run Text="网关部分（workbuddy_api）的作者是 " />
+                                    <Run Text="本项目基于开源社区的 " />
                                     <Hyperlink NavigateUri="https://github.com/znahovo"
                                                RequestNavigate="OpenLink_Click" Foreground="{StaticResource Accent}">
-                                        <Run Text="znahovo" />
+                                        <Run Text="上游项目" />
                                     </Hyperlink>
-                                    <Run Text="，本项目在其之上做了扩展；完整署名与许可分层见仓库的 README 与 LICENSE。" />
+                                    <Run Text=" 扩展而来；完整署名与许可分层见仓库的 README 与 LICENSE。" />
                                 </TextBlock>
                             </StackPanel>
                         </Border>
@@ -427,7 +427,7 @@
                                 <TextBlock Style="{StaticResource Sub}" FontFamily="Consolas, Microsoft YaHei UI">
                                     <Run Text="Claude Code" FontWeight="SemiBold" />
                                     <LineBreak />
-                                    <Run Text="  直接跑 claude 就行，配置写在 ~/.claude/settings.json 的 env 里。" />
+                                    <Run Text="  直接跑 claude 就行，配置会自动写进它自己的配置文件。" />
                                     <LineBreak /><LineBreak />
                                     <Run Text="Codex" FontWeight="SemiBold" />
                                     <LineBreak />
@@ -463,7 +463,7 @@
                                     <LineBreak />
                                     <Run Text="再去 App 里换号、回来再导入一次，就能攒出多个。网关用的是「网关正在用」那个号。" />
                                     <LineBreak />
-                                    <Run Text="账号信息存在 ~/.workbuddy-api/accounts.cn.json（仅本机，权限 0600），不动 App 自己的登录。" />
+                                    <Run Text="账号信息只存在本机你自己的用户目录里，不会上传，也不改动 App 自己的登录状态。" />
                                 </TextBlock>
 
                                 <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,0,0,14">
@@ -568,12 +568,13 @@
                                 </StackPanel>
 
                                 <TextBlock Style="{StaticResource Sub}" Margin="0,12,0,0">
-                                    <Run Text="注册后会在 Windows 计划任务里加一条每天 12:00 的任务，内容是 " />
-                                    <Run Text="WorkBuddyPanel.exe --maintain" FontFamily="Consolas" />
-                                    <Run Text="：不弹窗，跑完续期+签到就退出。" />
+                                    <Run Text="注册后会在系统的计划任务里加一条每天 12:00 的任务：" />
                                     <LineBreak />
-                                    <Run Text="电脑到点没开机也没事 —— 任务配了「错过就下次开机补跑」。" />
+                                    <Run Text="静默运行，不弹窗，跑完续期和签到就自己退出。" />
                                     <LineBreak />
+                                    <Run Text="电脑到点没开机也没事 —— 任务会在下次开机后自动补跑。" />
+                                    <LineBreak />
+                                    <Run Text="就算不注册，程序每次启动时也会检查一遍：登录快到期就静默续一次。" />
                                     <Run Text="就算不注册这个任务，程序每次启动时也会自己检查：窗口不够就静默续一遍。" />
                                 </TextBlock>
                             </StackPanel>
@@ -909,7 +910,7 @@
                                     <Run Text="{Binding RuntimeDefaultsHint, Mode=OneWay}" />
                                 </TextBlock>
 
-                                <TextBlock Text="node.exe（Node.js 主程序）" Style="{StaticResource Field}" />
+                                <TextBlock Text="运行环境程序" Style="{StaticResource Field}" />
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -920,7 +921,7 @@
                                             Margin="8,0,0,0" Click="BrowseNode_Click" />
                                 </Grid>
 
-                                <TextBlock Text="workbuddy_api 目录" Style="{StaticResource Field}" Margin="0,12,0,3" />
+                                <TextBlock Text="服务程序目录" Style="{StaticResource Field}" Margin="0,12,0,3" />
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -947,9 +948,9 @@
                                 </Border>
 
                                 <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
-                                    <Run Text="发布包里自带一份 Node.js 和一份 workbuddy_api，放在 exe 旁边的 runtime 子目录。" />
+                                    <Run Text="完整版自带运行环境，放在程序目录下，不需要额外安装任何东西。" />
                                     <LineBreak />
-                                    <Run Text="发布版默认就填这两个相对路径（.\runtime\node.exe / .\runtime\workbuddy_api），" />
+                                    <Run Text="默认填的是程序自带的运行环境（相对程序目录）。" />
                                     <LineBreak />
                                     <Run Text="所以不需要自己装 Node；把这两个框清空，程序才会去系统里找。" />
                                 </TextBlock>
@@ -1023,7 +1024,7 @@
                                 <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
                                     <Run Text="别的开关（托盘常驻、开机自启、自动刷新）改了就是即时生效，不用点保存。" />
                                     <LineBreak />
-                                    <Run Text="设置存在 %APPDATA%\WorkBuddyPanel\settings.json，和 workbuddy_api 自己的配置互不干扰。" />
+                                    <Run Text="设置只保存在你自己的用户目录里，和服务程序的配置互不干扰。" />
                                 </TextBlock>
                             </StackPanel>
                         </Border>
