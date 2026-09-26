@@ -471,14 +471,25 @@
                     滚动条是自己的、没有争抢。
                 -->
                 <Grid>
+                    <!--
+                        三行的高度分配。
+                    
+                        行 0  使用说明（可折叠）—— 按内容高
+                        行 1  吸顶工具条        —— 按内容高
+                        行 2  账号列表          —— ★ 必须 * 
+                    
+                        账号列表那行要是写成 Auto，它会一路撑到装下所有账号
+                        （实测 17 个账号时高度 3839px）—— 于是不需要滚动，
+                        虚拟化也不触发，一屏只能看到一个半。
+                    -->
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                 
                     <!-- ══ 吸顶工具条 ══ -->
-                    <Border Grid.Row="0" Background="#FBFCFD" BorderBrush="{StaticResource Line}"
+                    <Border Grid.Row="1" Background="#FBFCFD" BorderBrush="{StaticResource Line}"
                             BorderThickness="0,0,0,1" Padding="12,9">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -526,7 +537,7 @@
                     </Border>
                 
                     <!-- ══ 说明卡片（可滚动，但不常看）══ -->
-                        <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="6,8,6,12">
+                        <Border Grid.Row="2" Style="{StaticResource CardStyle}" Margin="6,8,6,12">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -735,554 +746,560 @@
                         </Border>
 
                         <!-- ══ 使用说明（默认收起，需要时展开）══ -->
-                        <Expander Grid.Row="2" Margin="6,0,6,12"
-                                  Background="White"
-                                  BorderBrush="{StaticResource Line}" BorderThickness="1"
-                                  Padding="4" IsExpanded="False">
+                        <Expander Grid.Row="0" Margin="6,0,6,12"
+                            Background="White"
+                            BorderBrush="{StaticResource Line}" BorderThickness="1"
+                            Padding="4" IsExpanded="False">
                             <Expander.Header>
-                                <TextBlock Text="使用说明（账号从哪来 / 怎么搬机器 / 怎么自动续期）"
-                                           FontSize ="13" FontWeight="SemiBold"
-                                           Foreground="{StaticResource TextMain}"
-                                           Margin="10,8,0,8" />
+                            <TextBlock Text="使用说明（账号从哪来 / 怎么搬机器 / 怎么自动续期）"
+                                FontSize ="13" FontWeight="SemiBold"
+                                Foreground="{StaticResource TextMain}"
+                                Margin="10,8,0,8" />
                             </Expander.Header>
-                            <StackPanel Margin="6,4,6,8">
-                        <StackPanel Margin="4,10,4,10">
+                                <!--
+                                内容包一层 ScrollViewer，并限制最大高度。
+                            
+                                不限制的话，展开后内容会顶破窗口 —— 说明有好几屏长，
+                                而 Expander 自身不带滚动条，超出部分看不见也滚不到。
+                                -->
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="420">
+                                    <StackPanel Margin="6,4,6,8">
 
-                            <Border Style="{StaticResource CardStyle}">
-                                <StackPanel>
-                                    <TextBlock Text="多个 WorkBuddy 账号" Style="{StaticResource H1}" />
-                                    <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
-                                        <Run Text="桌面 App 一次只能登一个号。点「导入当前账号」把现在登着的那个号存下来，" />
-                                        <LineBreak />
-                                        <Run Text="再去 App 里换号、回来再导入一次，就能攒出多个。网关用的是「网关正在用」那个号。" />
-                                        <LineBreak />
-                                        <Run Text="账号信息只存在本机你自己的用户目录里，不会上传，也不改动 App 自己的登录状态。" />
-                                    </TextBlock>
+                                        <Border Style="{StaticResource CardStyle}">
+                                            <StackPanel>
+                                                <TextBlock Text="多个 WorkBuddy 账号" Style="{StaticResource H1}" />
+                                                <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
+                                                    <Run Text="桌面 App 一次只能登一个号。点「导入当前账号」把现在登着的那个号存下来，" />
+                                                    <LineBreak />
+                                                    <Run Text="再去 App 里换号、回来再导入一次，就能攒出多个。网关用的是「网关正在用」那个号。" />
+                                                    <LineBreak />
+                                                    <Run Text="账号信息只存在本机你自己的用户目录里，不会上传，也不改动 App 自己的登录状态。" />
+                                                </TextBlock>
 
-                                    <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,0,0,14">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="网关当前使用：" Style="{StaticResource Sub}" FontSize="13"
-                                                       VerticalAlignment="Center" />
-                                            <TextBlock Text="{Binding ActiveAccountText}" FontSize="13" FontWeight="SemiBold"
-                                                       Foreground="{StaticResource Accent}" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                    </Border>
+                                                <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,0,0,14">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="网关当前使用：" Style="{StaticResource Sub}" FontSize="13"
+                                                            VerticalAlignment="Center" />
+                                                            <TextBlock Text="{Binding ActiveAccountText}" FontSize="13" FontWeight="SemiBold"
+                                                                Foreground="{StaticResource Accent}" VerticalAlignment="Center" />
+                                                            </StackPanel>
+                                                        </Border>
 
-                                    <StackPanel Orientation="Horizontal">
-                                        <Button Content="导入当前账号" Style="{StaticResource PrimaryButton}"
-                                                Command="{Binding ImportAccountCommand}" MinWidth="120" />
-                                        <Button Content="全部账号：续期 + 签到" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                                Command="{Binding CheckinAllCommand}" MinWidth="164"
-                                                ToolTip="对列表里全部账号发一次刷新请求（会把续期窗口推后），并且签到。已经签过的不会重复签。" />
-                                        <Button Content="全部账号：只续期" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                                Command="{Binding RenewAllCommand}" MinWidth="112"
-                                                ToolTip="对列表里全部账号发一次刷新请求，把登录有效期推后。不做签到。" />
-                                        <Button Content="刷新积分" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                                Command="{Binding RefreshAccountsCommand}"
-                                                ToolTip="重新读取每个账号的积分和签到状态（不发刷新请求，不消耗额度）" />
-                                        <Button Content="取消选定" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                                Command="{Binding ClearActiveAccountCommand}" />
-                                    </StackPanel>
-
-                                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                        <CheckBox Content="自动刷新积分" IsChecked="{Binding AccountsAutoRefresh, Mode=TwoWay}"
-                                                  VerticalAlignment="Center" />
-                                        <TextBlock Text="{Binding AccountsRefreshText}" Style="{StaticResource Sub}"
-                                                   Margin="10,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-
-                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                        <TextBlock Text="{Binding AccountsSummary}" Style="{StaticResource Sub}" />
-                                        <TextBlock Text="　·　上次刷新：" Style="{StaticResource Sub}" />
-                                        <TextBlock Text="{Binding AccountsFetchedAt}" Style="{StaticResource Sub}" />
-                                        <TextBlock Text="　·　「续期」= 重新拿一个满 60 天的登录有效期，不是重新扫登录。"
-                                                   Style="{StaticResource Sub}" />
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
-
-                            <Border Style="{StaticResource CardStyle}">
-                                <StackPanel>
-                                    <TextBlock Text="搬到另一台电脑" Style="{StaticResource H1}" />
-                                    <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
-                                        <Run Text="把账号导出成一个加密文件，在另一台电脑导入就能接着用，不用重新扫码。" />
-                                        <LineBreak />
-                                        <Run Text="token 是服务端的，跟机器无关；导入时会真的刷一次来验证能不能用。" />
-                                    </TextBlock>
-
-                                    <StackPanel Orientation="Horizontal">
-                                        <Button Content="导出账号" Style="{StaticResource PrimaryButton}"
-                                                Command="{Binding ExportAccountsCommand}" MinWidth="110" />
-                                        <Button Content="导入账号" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                                Command="{Binding ImportAccountsCommand}" MinWidth="110" />
-                                    </StackPanel>
-
-                                    <Border Background="#FFF8E5" BorderBrush="#F0DCA8" BorderThickness="1"
-                                            CornerRadius="6" Padding="10,8" Margin="0,12,0,0">
-                                        <TextBlock Style="{StaticResource Sub}" Foreground="#7A5B00" FontSize="12">
-                                            <Run Text="导出文件里有 refreshToken，等同于账号密码：" FontWeight="SemiBold" />
-                                            <LineBreak />
-                                            <Run Text="· 口令忘了就解不开，只能重新扫码" />
-                                            <LineBreak />
-                                            <Run Text="· 文件 + 口令给了别人，等于把这些号的额度给了别人" />
-                                            <LineBreak />
-                                            <Run Text="· 导入完就把文件删掉，别留在微信 / 网盘里" />
-                                        </TextBlock>
-                                    </Border>
-
-                                    <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
-                                        <Run Text="换机器后别忘了在「一键接入」页再点一次「全部配置」—— 客户端配置是指向本机网关的，那边 10 秒就能重配。" />
-                                    </TextBlock>
-                                </StackPanel>
-                            </Border>
-
-                            <Border Style="{StaticResource CardStyle}">
-                                <StackPanel>
-                                    <TextBlock Text="登录不会过期（自动续期）" Style="{StaticResource H1}" />
-                                    <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
-                                        <Run Text="WorkBuddy 的登录是滑动窗口：accessToken 活 55 天，refreshToken 活 60 天，" />
-                                        <LineBreak />
-                                        <Run Text="但服务端每次刷新都会重新发一个满额 60 天的 refreshToken。" />
-                                        <LineBreak />
-                                        <Run Text="所以在 60 天窗口内刷一次，就又能续 60 天 —— 只要不断，就永远不用再扫码。" />
-                                    </TextBlock>
-
-                                    <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,0,0,12">
-                                        <TextBlock Text="{Binding TaskStatus}" Style="{StaticResource Sub}" FontSize="13" />
-                                    </Border>
-
-                                    <StackPanel Orientation="Horizontal">
-                                        <Button Content="注册每日自动续期" Style="{StaticResource PrimaryButton}"
-                                                Command="{Binding RegisterTaskCommand}" MinWidth="140" />
-                                        <Button Content="立即跑一次" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                                Command="{Binding RunTaskNowCommand}" />
-                                        <Button Content="删除任务" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
-                                                Command="{Binding RemoveTaskCommand}" />
-                                    </StackPanel>
-
-                                    <TextBlock Style="{StaticResource Sub}" Margin="0,12,0,0">
-                                        <Run Text="注册后会在系统的计划任务里加一条每天 12:00 的任务：" />
-                                        <LineBreak />
-                                        <Run Text="静默运行，不弹窗，跑完续期和签到就自己退出。" />
-                                        <LineBreak />
-                                        <Run Text="电脑到点没开机也没事 —— 任务会在下次开机后自动补跑。" />
-                                        <LineBreak />
-                                        <Run Text="就算不注册，程序每次启动时也会检查一遍：登录快到期就静默续一次。" />
-                                        <Run Text="就算不注册这个任务，程序每次启动时也会自己检查：窗口不够就静默续一遍。" />
-                                    </TextBlock>
-                                </StackPanel>
-                            </Border>
-
-
-                            <Border Style="{StaticResource CardStyle}"
-                                    Visibility="{Binding HasAccountsResult, Converter={StaticResource BoolToVis}}">
-                                <StackPanel>
-                                    <TextBlock Text="操作结果" Style="{StaticResource H1}" />
-                                    <Border Background="#F6F8FA" CornerRadius="6" Padding="12,10">
-                                        <TextBlock Text="{Binding AccountsResult}" TextWrapping="Wrap"
-                                                   FontSize="12" FontFamily="Consolas, Microsoft YaHei UI" />
-                                    </Border>
-                                </StackPanel>
-                            </Border>
-
-                            <Border Style="{StaticResource CardStyle}">
-                                <StackPanel>
-                                    <TextBlock Text="签到是怎么做的" Style="{StaticResource H1}" />
-                                    <TextBlock Style="{StaticResource Sub}">
-                                        <Run Text="用的是客户端自己的接口：POST /v2/billing/meter/checkin-activity-status （查）" />
-                                        <LineBreak />
-                                        <Run Text="和 POST /v2/billing/meter/daily-checkin（签）。" />
-                                        <LineBreak /><LineBreak />
-                                        <Run Text="点「全部签到」会对每个账号先查后签：已经签过的不会重复请求，" />
-                                        <LineBreak />
-                                        <Run Text="已经过期的令牌会先自动刷新再签。签到得到的积分直接进对应账号。" />
-                                        <LineBreak /><LineBreak />
-                                        <Run Text="想每天自动签：在「设置」里勾上开机自启，然后在这里就能手动一键签；" />
-                                        <LineBreak />
-                                        <Run Text="或者命令行跑 workbuddy-api checkin。" />
-                                    </TextBlock>
-                                </StackPanel>
-                            </Border>
-
-                        </StackPanel>
-                            </StackPanel>
-                        </Expander>
-            </Grid>
-            </TabItem>
-
-            <!-- ══════════════ 对话 ══════════════ -->
-            <TabItem Header="  对话  ">
-                <Grid Margin="4,10,4,10">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-
-                    <!-- 工具栏 -->
-                    <Border Grid.Row="0" Style="{StaticResource CardStyle}" Margin="0,0,0,8">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="模型" VerticalAlignment="Center" Style="{StaticResource Sub}" />
-                            <ComboBox Width="380" Margin="8,0,0,0"
-                                      ItemsSource="{Binding Models}"
-                                      SelectedItem="{Binding SelectedModel, Mode=TwoWay}">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding Display}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-
-                            <Button Content="刷新列表" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                    Command="{Binding RefreshModelsCommand}" />
-                            <CheckBox Content="记录思考过程" Margin="16,0,0,0"
-                                      IsChecked="{Binding ShowReasoning, Mode=TwoWay}" />
-                            <Button Content="清空对话" Style="{StaticResource GhostButton}" Margin="16,0,0,0"
-                                    Command="{Binding ClearChatCommand}" />
-                        </StackPanel>
-                    </Border>
-
-                    <!-- 消息区 -->
-                    <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="0,0,0,8">
-                        <Grid>
-                            <ScrollViewer x:Name="ChatScroll" VerticalScrollBarVisibility="Auto">
-                                <ItemsControl ItemsSource="{Binding Messages}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Grid Margin="0,4">
-                                                <Border x:Name="Bubble" MaxWidth="760" CornerRadius="8" Padding="12,9"
-                                                        HorizontalAlignment="Left"
-                                                        Background="#FFFFFF"
-                                                        BorderBrush="{StaticResource Line}" BorderThickness="1">
-                                                    <StackPanel>
-                                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                                            <TextBlock Text="{Binding RoleLabel}" FontSize="11"
-                                                                       FontWeight="SemiBold" Foreground="{StaticResource TextSub}" />
-                                                            <TextBlock Text="{Binding TimeLabel}" FontSize="11"
-                                                                       Foreground="#A0A6AD" Margin="8,0,0,0" />
-                                                            <TextBlock Text="● 正在生成…" FontSize="11"
-                                                                       Foreground="{StaticResource Accent}" Margin="8,0,0,0"
-                                                                       Visibility="{Binding IsStreaming, Converter={StaticResource BoolToVis}}" />
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <Button Content="导入当前账号" Style="{StaticResource PrimaryButton}"
+                                                            Command="{Binding ImportAccountCommand}" MinWidth="120" />
+                                                            <Button Content="全部账号：续期 + 签到" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                            Command="{Binding CheckinAllCommand}" MinWidth="164"
+                                                            ToolTip="对列表里全部账号发一次刷新请求（会把续期窗口推后），并且签到。已经签过的不会重复签。" />
+                                                            <Button Content="全部账号：只续期" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                            Command="{Binding RenewAllCommand}" MinWidth="112"
+                                                            ToolTip="对列表里全部账号发一次刷新请求，把登录有效期推后。不做签到。" />
+                                                            <Button Content="刷新积分" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                            Command="{Binding RefreshAccountsCommand}"
+                                                            ToolTip="重新读取每个账号的积分和签到状态（不发刷新请求，不消耗额度）" />
+                                                            <Button Content="取消选定" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                            Command="{Binding ClearActiveAccountCommand}" />
                                                         </StackPanel>
 
-                                                        <Expander Header="思考过程" Margin="0,0,0,6" IsExpanded="False"
-                                                                  Visibility="{Binding HasReasoning, Converter={StaticResource BoolToVis}}">
-                                                            <TextBox Text="{Binding Reasoning, Mode=OneWay}" IsReadOnly="True"
-                                                                     TextWrapping="Wrap" Background="Transparent" BorderThickness="0"
-                                                                     Padding="0"
-                                                                     Foreground="{StaticResource TextSub}" FontSize="12"
-                                                                     VerticalScrollBarVisibility="Disabled" IsTabStop="False"
-                                                                     MaxHeight="320" />
-                                                        </Expander>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                                            <CheckBox Content="自动刷新积分" IsChecked="{Binding AccountsAutoRefresh, Mode=TwoWay}"
+                                                            VerticalAlignment="Center" />
+                                                            <TextBlock Text="{Binding AccountsRefreshText}" Style="{StaticResource Sub}"
+                                                                Margin="10,0,0,0" VerticalAlignment="Center" />
+                                                            </StackPanel>
 
-                                                        <TextBox Text="{Binding Text, Mode=OneWay}" IsReadOnly="True"
-                                                                 TextWrapping="Wrap" Background="Transparent" BorderThickness="0"
-                                                                 Padding="0"
-                                                                 FontSize="14" Foreground="{StaticResource TextMain}"
-                                                                 VerticalScrollBarVisibility="Disabled" IsTabStop="False" />
+                                                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                                <TextBlock Text="{Binding AccountsSummary}" Style="{StaticResource Sub}" />
+                                                                <TextBlock Text="　·　上次刷新：" Style="{StaticResource Sub}" />
+                                                                <TextBlock Text="{Binding AccountsFetchedAt}" Style="{StaticResource Sub}" />
+                                                                <TextBlock Text="　·　「续期」= 重新拿一个满 60 天的登录有效期，不是重新扫登录。"
+                                                                    Style="{StaticResource Sub}" />
+                                                                </StackPanel>
+                                                            </StackPanel>
+                                                        </Border>
 
-                                                        <TextBlock Text="{Binding Error}" Foreground="{StaticResource Bad}"
-                                                                   FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"
-                                                                   Visibility="{Binding HasError, Converter={StaticResource BoolToVis}}" />
+                                                        <Border Style="{StaticResource CardStyle}">
+                                                            <StackPanel>
+                                                                <TextBlock Text="搬到另一台电脑" Style="{StaticResource H1}" />
+                                                                <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
+                                                                    <Run Text="把账号导出成一个加密文件，在另一台电脑导入就能接着用，不用重新扫码。" />
+                                                                    <LineBreak />
+                                                                    <Run Text="token 是服务端的，跟机器无关；导入时会真的刷一次来验证能不能用。" />
+                                                                </TextBlock>
+
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <Button Content="导出账号" Style="{StaticResource PrimaryButton}"
+                                                                    Command="{Binding ExportAccountsCommand}" MinWidth="110" />
+                                                                    <Button Content="导入账号" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                                    Command="{Binding ImportAccountsCommand}" MinWidth="110" />
+                                                                </StackPanel>
+
+                                                                <Border Background="#FFF8E5" BorderBrush="#F0DCA8" BorderThickness="1"
+                                                                    CornerRadius="6" Padding="10,8" Margin="0,12,0,0">
+                                                                    <TextBlock Style="{StaticResource Sub}" Foreground="#7A5B00" FontSize="12">
+                                                                        <Run Text="导出文件里有 refreshToken，等同于账号密码：" FontWeight="SemiBold" />
+                                                                        <LineBreak />
+                                                                        <Run Text="· 口令忘了就解不开，只能重新扫码" />
+                                                                        <LineBreak />
+                                                                        <Run Text="· 文件 + 口令给了别人，等于把这些号的额度给了别人" />
+                                                                        <LineBreak />
+                                                                        <Run Text="· 导入完就把文件删掉，别留在微信 / 网盘里" />
+                                                                    </TextBlock>
+                                                                </Border>
+
+                                                                <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
+                                                                    <Run Text="换机器后别忘了在「一键接入」页再点一次「全部配置」—— 客户端配置是指向本机网关的，那边 10 秒就能重配。" />
+                                                                </TextBlock>
+                                                            </StackPanel>
+                                                        </Border>
+
+                                                        <Border Style="{StaticResource CardStyle}">
+                                                            <StackPanel>
+                                                                <TextBlock Text="登录不会过期（自动续期）" Style="{StaticResource H1}" />
+                                                                <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
+                                                                    <Run Text="WorkBuddy 的登录是滑动窗口：accessToken 活 55 天，refreshToken 活 60 天，" />
+                                                                    <LineBreak />
+                                                                    <Run Text="但服务端每次刷新都会重新发一个满额 60 天的 refreshToken。" />
+                                                                    <LineBreak />
+                                                                    <Run Text="所以在 60 天窗口内刷一次，就又能续 60 天 —— 只要不断，就永远不用再扫码。" />
+                                                                </TextBlock>
+
+                                                                <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,0,0,12">
+                                                                    <TextBlock Text="{Binding TaskStatus}" Style="{StaticResource Sub}" FontSize="13" />
+                                                                </Border>
+
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <Button Content="注册每日自动续期" Style="{StaticResource PrimaryButton}"
+                                                                    Command="{Binding RegisterTaskCommand}" MinWidth="140" />
+                                                                    <Button Content="立即跑一次" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                                    Command="{Binding RunTaskNowCommand}" />
+                                                                    <Button Content="删除任务" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
+                                                                    Command="{Binding RemoveTaskCommand}" />
+                                                                </StackPanel>
+
+                                                                <TextBlock Style="{StaticResource Sub}" Margin="0,12,0,0">
+                                                                    <Run Text="注册后会在系统的计划任务里加一条每天 12:00 的任务：" />
+                                                                    <LineBreak />
+                                                                    <Run Text="静默运行，不弹窗，跑完续期和签到就自己退出。" />
+                                                                    <LineBreak />
+                                                                    <Run Text="电脑到点没开机也没事 —— 任务会在下次开机后自动补跑。" />
+                                                                    <LineBreak />
+                                                                    <Run Text="就算不注册，程序每次启动时也会检查一遍：登录快到期就静默续一次。" />
+                                                                    <Run Text="就算不注册这个任务，程序每次启动时也会自己检查：窗口不够就静默续一遍。" />
+                                                                </TextBlock>
+                                                            </StackPanel>
+                                                        </Border>
+
+
+                                                        <Border Style="{StaticResource CardStyle}"
+                                                            Visibility="{Binding HasAccountsResult, Converter={StaticResource BoolToVis}}">
+                                                            <StackPanel>
+                                                                <TextBlock Text="操作结果" Style="{StaticResource H1}" />
+                                                                <Border Background="#F6F8FA" CornerRadius="6" Padding="12,10">
+                                                                    <TextBlock Text="{Binding AccountsResult}" TextWrapping="Wrap"
+                                                                        FontSize="12" FontFamily="Consolas, Microsoft YaHei UI" />
+                                                                    </Border>
+                                                                </StackPanel>
+                                                            </Border>
+
+                                                            <Border Style="{StaticResource CardStyle}">
+                                                                <StackPanel>
+                                                                    <TextBlock Text="签到是怎么做的" Style="{StaticResource H1}" />
+                                                                    <TextBlock Style="{StaticResource Sub}">
+                                                                        <Run Text="用的是客户端自己的接口：POST /v2/billing/meter/checkin-activity-status （查）" />
+                                                                        <LineBreak />
+                                                                        <Run Text="和 POST /v2/billing/meter/daily-checkin（签）。" />
+                                                                        <LineBreak /><LineBreak />
+                                                                        <Run Text="点「全部签到」会对每个账号先查后签：已经签过的不会重复请求，" />
+                                                                        <LineBreak />
+                                                                        <Run Text="已经过期的令牌会先自动刷新再签。签到得到的积分直接进对应账号。" />
+                                                                        <LineBreak /><LineBreak />
+                                                                        <Run Text="想每天自动签：在「设置」里勾上开机自启，然后在这里就能手动一键签；" />
+                                                                        <LineBreak />
+                                                                        <Run Text="或者命令行跑 workbuddy-api checkin。" />
+                                                                    </TextBlock>
+                                                                </StackPanel>
+                                                            </Border>
+
+                                                        </StackPanel>
+                                                    </ScrollViewer>
+                                                </Expander>
+                                            </Grid>
+                                        </TabItem>
+
+                                            <!-- ══════════════ 对话 ══════════════ -->
+                                            <TabItem Header="  对话  ">
+                                            <Grid Margin="4,10,4,10">
+                                                <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="*" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                                <!-- 工具栏 -->
+                                                <Border Grid.Row="0" Style="{StaticResource CardStyle}" Margin="0,0,0,8">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="模型" VerticalAlignment="Center" Style="{StaticResource Sub}" />
+                                                        <ComboBox Width="380" Margin="8,0,0,0"
+                                                        ItemsSource="{Binding Models}"
+                                                        SelectedItem="{Binding SelectedModel, Mode=TwoWay}">
+                                                        <ComboBox.ItemTemplate>
+                                                        <DataTemplate>
+                                                        <TextBlock Text="{Binding Display}" />
+                                                    </DataTemplate>
+                                                    </ComboBox.ItemTemplate>
+                                                    </ComboBox>
+
+                                                        <Button Content="刷新列表" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                        Command="{Binding RefreshModelsCommand}" />
+                                                        <CheckBox Content="记录思考过程" Margin="16,0,0,0"
+                                                        IsChecked="{Binding ShowReasoning, Mode=TwoWay}" />
+                                                        <Button Content="清空对话" Style="{StaticResource GhostButton}" Margin="16,0,0,0"
+                                                        Command="{Binding ClearChatCommand}" />
                                                     </StackPanel>
                                                 </Border>
-                                            </Grid>
-                                            <DataTemplate.Triggers>
-                                                <DataTrigger Binding="{Binding IsUser}" Value="True">
-                                                    <Setter TargetName="Bubble" Property="HorizontalAlignment" Value="Right" />
-                                                    <Setter TargetName="Bubble" Property="Background" Value="#DDEAFE" />
-                                                    <Setter TargetName="Bubble" Property="BorderBrush" Value="#C4D9F8" />
-                                                </DataTrigger>
-                                            </DataTemplate.Triggers>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
 
-                            <TextBlock Style="{StaticResource Sub}" HorizontalAlignment="Center"
-                                       VerticalAlignment="Center" TextAlignment="Center"
-                                       Visibility="{Binding HasMessages, Converter={StaticResource BoolToVisInv}}">
-                                <Run Text="还没有对话。" />
-                                <LineBreak />
-                                <Run Text="先在顶上选一个模型（hy3 现在是限时免费），然后在下面输入框里打字回车。" />
-                            </TextBlock>
-                        </Grid>
-                    </Border>
+                                                <!-- 消息区 -->
+                                                <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="0,0,0,8">
+                                                    <Grid>
+                                                        <ScrollViewer x:Name="ChatScroll" VerticalScrollBarVisibility="Auto">
+                                                            <ItemsControl ItemsSource="{Binding Messages}">
+                                                            <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                            <Grid Margin="0,4">
+                                                                <Border x:Name="Bubble" MaxWidth="760" CornerRadius="8" Padding="12,9"
+                                                                    HorizontalAlignment="Left"
+                                                                    Background="#FFFFFF"
+                                                                    BorderBrush="{StaticResource Line}" BorderThickness="1">
+                                                                    <StackPanel>
+                                                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                                                            <TextBlock Text="{Binding RoleLabel}" FontSize="11"
+                                                                                FontWeight="SemiBold" Foreground="{StaticResource TextSub}" />
+                                                                                <TextBlock Text="{Binding TimeLabel}" FontSize="11"
+                                                                                    Foreground="#A0A6AD" Margin="8,0,0,0" />
+                                                                                    <TextBlock Text="● 正在生成…" FontSize="11"
+                                                                                        Foreground="{StaticResource Accent}" Margin="8,0,0,0"
+                                                                                        Visibility="{Binding IsStreaming, Converter={StaticResource BoolToVis}}" />
+                                                                                    </StackPanel>
 
-                    <!-- 输入区 -->
-                    <Border Grid.Row="2" Style="{StaticResource CardStyle}">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
+                                                                                    <Expander Header="思考过程" Margin="0,0,0,6" IsExpanded="False"
+                                                                                        Visibility="{Binding HasReasoning, Converter={StaticResource BoolToVis}}">
+                                                                                        <TextBox Text="{Binding Reasoning, Mode=OneWay}" IsReadOnly="True"
+                                                                                        TextWrapping="Wrap" Background="Transparent" BorderThickness="0"
+                                                                                        Padding="0"
+                                                                                        Foreground="{StaticResource TextSub}" FontSize="12"
+                                                                                        VerticalScrollBarVisibility="Disabled" IsTabStop="False"
+                                                                                        MaxHeight="320" />
+                                                                                    </Expander>
 
-                            <TextBox x:Name="InputBox" Grid.Column="0"
-                                     KeyDown="InputBox_KeyDown"
-                                     Text="{Binding Input, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                     AcceptsReturn="True" TextWrapping="Wrap" MinHeight="62" MaxHeight="160"
-                                     VerticalContentAlignment="Top"
-                                     VerticalScrollBarVisibility="Auto"
-                                     FontSize="13" />
+                                                                                    <TextBox Text="{Binding Text, Mode=OneWay}" IsReadOnly="True"
+                                                                                    TextWrapping="Wrap" Background="Transparent" BorderThickness="0"
+                                                                                    Padding="0"
+                                                                                    FontSize="14" Foreground="{StaticResource TextMain}"
+                                                                                    VerticalScrollBarVisibility="Disabled" IsTabStop="False" />
 
-                            <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Bottom">
-                                <Button Content="发送" Style="{StaticResource PrimaryButton}" MinWidth="86"
-                                        Command="{Binding SendCommand}" />
-                                <Button Content="停止" Style="{StaticResource GhostButton}" MinWidth="86" Margin="0,6,0,0"
-                                        Command="{Binding StopGenerationCommand}" />
-                                <TextBlock Text="回车发送 / Shift+回车换行" Style="{StaticResource Sub}"
-                                           Margin="0,6,0,0" FontSize="11" />
-                            </StackPanel>
-                        </Grid>
-                    </Border>
-                </Grid>
-            </TabItem>
+                                                                                    <TextBlock Text="{Binding Error}" Foreground="{StaticResource Bad}"
+                                                                                        FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"
+                                                                                        Visibility="{Binding HasError, Converter={StaticResource BoolToVis}}" />
+                                                                                    </StackPanel>
+                                                                                </Border>
+                                                                            </Grid>
+                                                                            <DataTemplate.Triggers>
+                                                                            <DataTrigger Binding="{Binding IsUser}" Value="True">
+                                                                            <Setter TargetName="Bubble" Property="HorizontalAlignment" Value="Right" />
+                                                                            <Setter TargetName="Bubble" Property="Background" Value="#DDEAFE" />
+                                                                            <Setter TargetName="Bubble" Property="BorderBrush" Value="#C4D9F8" />
+                                                                        </DataTrigger>
+                                                                        </DataTemplate.Triggers>
+                                                                        </DataTemplate>
+                                                                        </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                        </ScrollViewer>
 
-            <!-- ══════════════ 模型 ══════════════ -->
-            <TabItem Header="  模型  ">
-                <Grid Margin="4,10,4,10">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
+                                                                        <TextBlock Style="{StaticResource Sub}" HorizontalAlignment="Center"
+                                                                            VerticalAlignment="Center" TextAlignment="Center"
+                                                                            Visibility="{Binding HasMessages, Converter={StaticResource BoolToVisInv}}">
+                                                                            <Run Text="还没有对话。" />
+                                                                            <LineBreak />
+                                                                            <Run Text="先在顶上选一个模型（hy3 现在是限时免费），然后在下面输入框里打字回车。" />
+                                                                        </TextBlock>
+                                                                    </Grid>
+                                                                </Border>
 
-                    <Border Grid.Row="0" Style="{StaticResource CardStyle}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="{Binding ProviderLabel}" Style="{StaticResource H2}" Margin="0,0,16,0"
-                                       VerticalAlignment="Center" />
-                            <TextBlock Style="{StaticResource Sub}" VerticalAlignment="Center">
-                                <Run Text="共" />
-                                <Run Text="{Binding ModelCountText, Mode=OneWay}" FontWeight="SemiBold" />
-                                <Run Text="个　来源：" />
-                                <Run Text="{Binding CatalogSourceText, Mode=OneWay}" />
-                            </TextBlock>
-                            <Button Content="刷新" Style="{StaticResource GhostButton}" Margin="16,0,0,0"
-                                    Command="{Binding RefreshModelsCommand}" />
-                        </StackPanel>
-                    </Border>
+                                                                <!-- 输入区 -->
+                                                                <Border Grid.Row="2" Style="{StaticResource CardStyle}">
+                                                                    <Grid>
+                                                                        <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="*" />
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                    </Grid.ColumnDefinitions>
 
-                    <Border Grid.Row="1" Style="{StaticResource CardStyle}">
-                        <DataGrid ItemsSource="{Binding Models}"
-                                  SelectedItem="{Binding SelectedModel, Mode=TwoWay}"
-                                  AutoGenerateColumns="False" IsReadOnly="True"
-                                  HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                                  CanUserAddRows="False" CanUserDeleteRows="False"
-                                  SelectionMode="Single" RowHeight="32"
-                                  BorderThickness="0" Background="Transparent"
-                                  HorizontalGridLinesBrush="{StaticResource Line}">
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Header="模型 ID" Binding="{Binding Id}" Width="210" />
-                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="180" />
-                                <DataGridTextColumn Header="上下文" Binding="{Binding Context}" Width="90" />
-                                <DataGridTextColumn Header="最大输出" Binding="{Binding MaxOutput}" Width="90" />
-                                <DataGridTextColumn Header="图片" Binding="{Binding Images}" Width="70" />
-                                <DataGridTextColumn Header="积分倍率" Binding="{Binding Rate}" Width="90" />
-                                <DataGridTextColumn Header="推理档位" Binding="{Binding Efforts}" Width="120" />
-                                <DataGridTextColumn Header="活动" Binding="{Binding Badges}" Width="*" />
-                            </DataGrid.Columns>
-                        </DataGrid>
-                    </Border>
-                </Grid>
-            </TabItem>
+                                                                        <TextBox x:Name="InputBox" Grid.Column="0"
+                                                                        KeyDown="InputBox_KeyDown"
+                                                                        Text="{Binding Input, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                        AcceptsReturn="True" TextWrapping="Wrap" MinHeight="62" MaxHeight="160"
+                                                                        VerticalContentAlignment="Top"
+                                                                        VerticalScrollBarVisibility="Auto"
+                                                                        FontSize="13" />
 
-            <!-- ══════════════ 设置 ══════════════ -->
-            <TabItem Header="  设置  ">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="2">
-                    <StackPanel Margin="4,10,4,10">
+                                                                        <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Bottom">
+                                                                            <Button Content="发送" Style="{StaticResource PrimaryButton}" MinWidth="86"
+                                                                            Command="{Binding SendCommand}" />
+                                                                            <Button Content="停止" Style="{StaticResource GhostButton}" MinWidth="86" Margin="0,6,0,0"
+                                                                            Command="{Binding StopGenerationCommand}" />
+                                                                            <TextBlock Text="回车发送 / Shift+回车换行" Style="{StaticResource Sub}"
+                                                                                Margin="0,6,0,0" FontSize="11" />
+                                                                            </StackPanel>
+                                                                        </Grid>
+                                                                    </Border>
+                                                                </Grid>
+                                                            </TabItem>
 
-                        <Border Style="{StaticResource CardStyle}">
-                            <StackPanel>
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                    <TextBlock Text="运行环境" FontSize="20" FontWeight="SemiBold"
-                                               Foreground="{StaticResource TextMain}" Margin="0" />
-                                    <Border Background="#FFF1C9" BorderBrush="#E8CC7A" BorderThickness="1"
-                                            CornerRadius="4" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center"
-                                            Visibility="{Binding SettingsDirty, Converter={StaticResource BoolToVis}}">
-                                        <TextBlock Text="有改动未保存" FontSize="11" Foreground="#7A5B00" />
-                                    </Border>
-                                </StackPanel>
-                                <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
-                                    <Run Text="不知道填什么就点「自动探测」。探测不到再手动选。" />
-                                    <LineBreak />
-                                    <Run Text="{Binding RuntimeDefaultsHint, Mode=OneWay}" />
-                                </TextBlock>
+                                                                <!-- ══════════════ 模型 ══════════════ -->
+                                                                <TabItem Header="  模型  ">
+                                                                <Grid Margin="4,10,4,10">
+                                                                    <Grid.RowDefinitions>
+                                                                    <RowDefinition Height="Auto" />
+                                                                    <RowDefinition Height="*" />
+                                                                </Grid.RowDefinitions>
 
-                                <TextBlock Text="运行环境程序" Style="{StaticResource Field}" />
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                <TextBox Text="{Binding NodePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Grid.Column="0" Grid.ColumnSpan="1" />
-                                    <Button Grid.Column="1" Content="浏览…" Style="{StaticResource GhostButton}"
-                                            Margin="8,0,0,0" Click="BrowseNode_Click" />
-                                </Grid>
+                                                                    <Border Grid.Row="0" Style="{StaticResource CardStyle}">
+                                                                        <StackPanel Orientation="Horizontal">
+                                                                            <TextBlock Text="{Binding ProviderLabel}" Style="{StaticResource H2}" Margin="0,0,16,0"
+                                                                                VerticalAlignment="Center" />
+                                                                                <TextBlock Style="{StaticResource Sub}" VerticalAlignment="Center">
+                                                                                    <Run Text="共" />
+                                                                                    <Run Text="{Binding ModelCountText, Mode=OneWay}" FontWeight="SemiBold" />
+                                                                                    <Run Text="个　来源：" />
+                                                                                    <Run Text="{Binding CatalogSourceText, Mode=OneWay}" />
+                                                                                </TextBlock>
+                                                                                <Button Content="刷新" Style="{StaticResource GhostButton}" Margin="16,0,0,0"
+                                                                                Command="{Binding RefreshModelsCommand}" />
+                                                                            </StackPanel>
+                                                                        </Border>
 
-                                <TextBlock Text="服务程序目录" Style="{StaticResource Field}" Margin="0,12,0,3" />
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBox Grid.Column="0" Text="{Binding ApiDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" VerticalContentAlignment="Center" />
-                                    <Button Grid.Column="1" Content="浏览…" Style="{StaticResource GhostButton}"
-                                            Margin="8,0,0,0" Click="BrowseApiDir_Click" />
-                                </Grid>
+                                                                        <Border Grid.Row="1" Style="{StaticResource CardStyle}">
+                                                                            <DataGrid ItemsSource="{Binding Models}"
+                                                                            SelectedItem="{Binding SelectedModel, Mode=TwoWay}"
+                                                                            AutoGenerateColumns="False" IsReadOnly="True"
+                                                                            HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                                                            CanUserAddRows="False" CanUserDeleteRows="False"
+                                                                            SelectionMode="Single" RowHeight="32"
+                                                                            BorderThickness="0" Background="Transparent"
+                                                                            HorizontalGridLinesBrush="{StaticResource Line}">
+                                                                            <DataGrid.Columns>
+                                                                            <DataGridTextColumn Header="模型 ID" Binding="{Binding Id}" Width="210" />
+                                                                            <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="180" />
+                                                                            <DataGridTextColumn Header="上下文" Binding="{Binding Context}" Width="90" />
+                                                                            <DataGridTextColumn Header="最大输出" Binding="{Binding MaxOutput}" Width="90" />
+                                                                            <DataGridTextColumn Header="图片" Binding="{Binding Images}" Width="70" />
+                                                                            <DataGridTextColumn Header="积分倍率" Binding="{Binding Rate}" Width="90" />
+                                                                            <DataGridTextColumn Header="推理档位" Binding="{Binding Efforts}" Width="120" />
+                                                                            <DataGridTextColumn Header="活动" Binding="{Binding Badges}" Width="*" />
+                                                                        </DataGrid.Columns>
+                                                                        </DataGrid>
+                                                                        </Border>
+                                                                    </Grid>
+                                                                </TabItem>
 
-                                <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-                                    <Button Content="自动探测" Style="{StaticResource PrimaryButton}"
-                                            Click="AutoDetect_Click" />
-                                    <Button Content="保存设置" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                            Command="{Binding SaveSettingsCommand}" />                                </StackPanel>
+                                                                    <!-- ══════════════ 设置 ══════════════ -->
+                                                                    <TabItem Header="  设置  ">
+                                                                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="2">
+                                                                        <StackPanel Margin="4,10,4,10">
 
-                                <TextBlock Text="{Binding PathsHint}" Style="{StaticResource Sub}" Margin="0,12,0,0" />
+                                                                            <Border Style="{StaticResource CardStyle}">
+                                                                                <StackPanel>
+                                                                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                                                                        <TextBlock Text="运行环境" FontSize="20" FontWeight="SemiBold"
+                                                                                            Foreground="{StaticResource TextMain}" Margin="0" />
+                                                                                            <Border Background="#FFF1C9" BorderBrush="#E8CC7A" BorderThickness="1"
+                                                                                                CornerRadius="4" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center"
+                                                                                                Visibility="{Binding SettingsDirty, Converter={StaticResource BoolToVis}}">
+                                                                                                <TextBlock Text="有改动未保存" FontSize="11" Foreground="#7A5B00" />
+                                                                                            </Border>
+                                                                                        </StackPanel>
+                                                                                        <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,12">
+                                                                                            <Run Text="不知道填什么就点「自动探测」。探测不到再手动选。" />
+                                                                                            <LineBreak />
+                                                                                            <Run Text="{Binding RuntimeDefaultsHint, Mode=OneWay}" />
+                                                                                        </TextBlock>
 
-                                <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,10,0,0">
-                                    <StackPanel>
-                                        <TextBlock Text="当前使用" Style="{StaticResource Field}" />
-                                        <TextBlock Text="{Binding RuntimeSummary}" FontSize="13" TextWrapping="Wrap" />
-                                    </StackPanel>
-                                </Border>
+                                                                                        <TextBlock Text="运行环境程序" Style="{StaticResource Field}" />
+                                                                                        <Grid>
+                                                                                            <Grid.ColumnDefinitions>
+                                                                                            <ColumnDefinition Width="*" />
+                                                                                            <ColumnDefinition Width="Auto" />
+                                                                                        </Grid.ColumnDefinitions>
+                                                                                            <TextBox Text="{Binding NodePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Grid.Column="0" Grid.ColumnSpan="1" />
+                                                                                            <Button Grid.Column="1" Content="浏览…" Style="{StaticResource GhostButton}"
+                                                                                            Margin="8,0,0,0" Click="BrowseNode_Click" />
+                                                                                        </Grid>
 
-                                <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
-                                    <Run Text="完整版自带运行环境，放在程序目录下，不需要额外安装任何东西。" />
-                                    <LineBreak />
-                                    <Run Text="默认填的是程序自带的运行环境（相对程序目录）。" />
-                                    <LineBreak />
-                                    <Run Text="所以不需要自己装 Node；把这两个框清空，程序才会去系统里找。" />
-                                </TextBlock>
-                            </StackPanel>
-                        </Border>
+                                                                                        <TextBlock Text="服务程序目录" Style="{StaticResource Field}" Margin="0,12,0,3" />
+                                                                                        <Grid>
+                                                                                            <Grid.ColumnDefinitions>
+                                                                                            <ColumnDefinition Width="*" />
+                                                                                            <ColumnDefinition Width="Auto" />
+                                                                                        </Grid.ColumnDefinitions>
+                                                                                            <TextBox Grid.Column="0" Text="{Binding ApiDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" VerticalContentAlignment="Center" />
+                                                                                            <Button Grid.Column="1" Content="浏览…" Style="{StaticResource GhostButton}"
+                                                                                            Margin="8,0,0,0" Click="BrowseApiDir_Click" />
+                                                                                        </Grid>
 
-                        <Border Style="{StaticResource CardStyle}">
-                            <StackPanel>
-                                <TextBlock Text="后台驻留" Style="{StaticResource H1}" />
+                                                                                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                                                                                            <Button Content="自动探测" Style="{StaticResource PrimaryButton}"
+                                                                                            Click="AutoDetect_Click" />
+                                                                                            <Button Content="保存设置" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                                                            Command="{Binding SaveSettingsCommand}" />                                </StackPanel>
 
-                                <CheckBox Content="关闭窗口时收进托盘（网关继续在后台运行）"
-                                          IsChecked="{Binding MinimizeToTray, Mode=TwoWay}" Margin="0,0,0,8" />
-                                <CheckBox Content="程序启动时自动拉起网关"
-                                          IsChecked="{Binding AutoStartGateway, Mode=TwoWay}" Margin="0,0,0,8" />
-                                <CheckBox Content="开机自动启动（静默进托盘，全程不弹窗口）"
-                                          IsChecked="{Binding AutoStartWithWindows, Mode=TwoWay}" Margin="0,0,0,12" />
+                                                                                        <TextBlock Text="{Binding PathsHint}" Style="{StaticResource Sub}" Margin="0,12,0,0" />
 
-                                <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8">
-                                    <TextBlock Text="{Binding TrayHint}" Style="{StaticResource Sub}" />
-                                </Border>
+                                                                                        <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,10,0,0">
+                                                                                            <StackPanel>
+                                                                                                <TextBlock Text="当前使用" Style="{StaticResource Field}" />
+                                                                                                <TextBlock Text="{Binding RuntimeSummary}" FontSize="13" TextWrapping="Wrap" />
+                                                                                            </StackPanel>
+                                                                                        </Border>
 
-                                <TextBlock Style="{StaticResource Sub}" Margin="0,12,0,0">
-                                    <Run Text="勾了开机自启后，系统会在 HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" />
-                                    <LineBreak />
-                                    <Run Text="里写一条带 --tray 参数的启动项。要真正退出程序（并停掉网关），用托盘右键菜单里的「退出」。" />
-                                </TextBlock>
-                            </StackPanel>
-                        </Border>
+                                                                                        <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
+                                                                                            <Run Text="完整版自带运行环境，放在程序目录下，不需要额外安装任何东西。" />
+                                                                                            <LineBreak />
+                                                                                            <Run Text="默认填的是程序自带的运行环境（相对程序目录）。" />
+                                                                                            <LineBreak />
+                                                                                            <Run Text="所以不需要自己装 Node；把这两个框清空，程序才会去系统里找。" />
+                                                                                        </TextBlock>
+                                                                                    </StackPanel>
+                                                                                </Border>
 
-                        <Border Style="{StaticResource CardStyle}">
-                            <StackPanel>
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                    <TextBlock Text="网关参数" FontSize="20" FontWeight="SemiBold"
-                                               Foreground="{StaticResource TextMain}" Margin="0" />
-                                    <Border Background="#FFF1C9" BorderBrush="#E8CC7A" BorderThickness="1"
-                                            CornerRadius="4" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center"
-                                            Visibility="{Binding SettingsDirty, Converter={StaticResource BoolToVis}}">
-                                        <TextBlock Text="有改动未保存" FontSize="11" Foreground="#7A5B00" />
-                                    </Border>
-                                </StackPanel>
+                                                                                <Border Style="{StaticResource CardStyle}">
+                                                                                    <StackPanel>
+                                                                                        <TextBlock Text="后台驻留" Style="{StaticResource H1}" />
 
-                                <TextBlock Text="端口（默认 8787，被占用了就改成 8788 之类）" Style="{StaticResource Field}" />
-                                <TextBox Text="{Binding Port, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" MaxWidth="200"
-                                         HorizontalAlignment="Left" MinWidth="200" />
+                                                                                        <CheckBox Content="关闭窗口时收进托盘（网关继续在后台运行）"
+                                                                                        IsChecked="{Binding MinimizeToTray, Mode=TwoWay}" Margin="0,0,0,8" />
+                                                                                        <CheckBox Content="程序启动时自动拉起网关"
+                                                                                        IsChecked="{Binding AutoStartGateway, Mode=TwoWay}" Margin="0,0,0,8" />
+                                                                                        <CheckBox Content="开机自动启动（静默进托盘，全程不弹窗口）"
+                                                                                        IsChecked="{Binding AutoStartWithWindows, Mode=TwoWay}" Margin="0,0,0,12" />
 
-                                <TextBlock Text="版本" Style="{StaticResource Field}" Margin="0,12,0,3" />
-                                <ComboBox ItemsSource="{Binding ProviderOptions}" SelectedItem="{Binding Provider, Mode=TwoWay}"
-                                          MaxWidth="240" HorizontalAlignment="Left" MinWidth="240" />
+                                                                                        <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8">
+                                                                                            <TextBlock Text="{Binding TrayHint}" Style="{StaticResource Sub}" />
+                                                                                        </Border>
 
-                                <TextBlock Text="API Key（客户端要填的口令，本机自用，随便设）" Style="{StaticResource Field}" Margin="0,12,0,3" />
-                                <TextBox Text="{Binding ApiKey, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" MaxWidth="420"
-                                         HorizontalAlignment="Left" MinWidth="420" />
+                                                                                        <TextBlock Style="{StaticResource Sub}" Margin="0,12,0,0">
+                                                                                            <Run Text="勾了开机自启后，系统会在 HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" />
+                                                                                            <LineBreak />
+                                                                                            <Run Text="里写一条带 --tray 参数的启动项。要真正退出程序（并停掉网关），用托盘右键菜单里的「退出」。" />
+                                                                                        </TextBlock>
+                                                                                    </StackPanel>
+                                                                                </Border>
 
-                                <TextBlock Text="登录文件路径（留空 = 自动探测，一般不用填）" Style="{StaticResource Field}" Margin="0,12,0,3" />
-                                <TextBox Text="{Binding AuthFile, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                         MaxWidth="620" HorizontalAlignment="Left" MinWidth="620" />
+                                                                                <Border Style="{StaticResource CardStyle}">
+                                                                                    <StackPanel>
+                                                                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                                                                            <TextBlock Text="网关参数" FontSize="20" FontWeight="SemiBold"
+                                                                                                Foreground="{StaticResource TextMain}" Margin="0" />
+                                                                                                <Border Background="#FFF1C9" BorderBrush="#E8CC7A" BorderThickness="1"
+                                                                                                    CornerRadius="4" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center"
+                                                                                                    Visibility="{Binding SettingsDirty, Converter={StaticResource BoolToVis}}">
+                                                                                                    <TextBlock Text="有改动未保存" FontSize="11" Foreground="#7A5B00" />
+                                                                                                </Border>
+                                                                                            </StackPanel>
 
-                                <!-- 保存按钮就在这张卡片里，不再让人往上找 -->
-                                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
-                                    <Button Content="保存设置" Style="{StaticResource PrimaryButton}"
-                                            Command="{Binding SaveSettingsCommand}" MinWidth="110" />
-                                    <Button Content="恢复默认" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                            Command="{Binding ResetSettingsCommand}"
-                                            ToolTip="把端口 / API Key / 路径恢复成默认值，并保存" />
-                                </StackPanel>
+                                                                                            <TextBlock Text="端口（默认 8787，被占用了就改成 8788 之类）" Style="{StaticResource Field}" />
+                                                                                            <TextBox Text="{Binding Port, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" MaxWidth="200"
+                                                                                            HorizontalAlignment="Left" MinWidth="200" />
 
-                                <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,12,0,0">
-                                    <TextBlock Text="{Binding SettingsDirtyHint}" Style="{StaticResource Sub}"
-                                               FontSize="12.5" TextWrapping="Wrap" />
-                                </Border>
-                                <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
-                                    <Run Text="别的开关（托盘常驻、开机自启、自动刷新）改了就是即时生效，不用点保存。" />
-                                    <LineBreak />
-                                    <Run Text="设置只保存在你自己的用户目录里，和服务程序的配置互不干扰。" />
-                                </TextBlock>
-                            </StackPanel>
-                        </Border>
+                                                                                            <TextBlock Text="版本" Style="{StaticResource Field}" Margin="0,12,0,3" />
+                                                                                            <ComboBox ItemsSource="{Binding ProviderOptions}" SelectedItem="{Binding Provider, Mode=TwoWay}"
+                                                                                            MaxWidth="240" HorizontalAlignment="Left" MinWidth="240" />
 
-                    </StackPanel>
-                </ScrollViewer>
-            </TabItem>
+                                                                                            <TextBlock Text="API Key（客户端要填的口令，本机自用，随便设）" Style="{StaticResource Field}" Margin="0,12,0,3" />
+                                                                                            <TextBox Text="{Binding ApiKey, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" MaxWidth="420"
+                                                                                            HorizontalAlignment="Left" MinWidth="420" />
 
-            <!-- ══════════════ 日志 ══════════════ -->
-            <TabItem Header="  日志  ">
-                <Grid Margin="4,10,4,10">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
+                                                                                            <TextBlock Text="登录文件路径（留空 = 自动探测，一般不用填）" Style="{StaticResource Field}" Margin="0,12,0,3" />
+                                                                                            <TextBox Text="{Binding AuthFile, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                                                                            MaxWidth="620" HorizontalAlignment="Left" MinWidth="620" />
 
-                    <Border Grid.Row="0" Style="{StaticResource CardStyle}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="程序与网关的输出" Style="{StaticResource H2}" Margin="0,0,16,0"
-                                       VerticalAlignment="Center" />
-                            <Button Content="清空日志" Style="{StaticResource GhostButton}"
-                                    Command="{Binding ClearLogCommand}" />
-                            <TextBlock Text="出问题了就把这里的内容截图发出来" Style="{StaticResource Sub}"
-                                       VerticalAlignment="Center" Margin="16,0,0,0" />
-                        </StackPanel>
-                    </Border>
+                                                                                            <!-- 保存按钮就在这张卡片里，不再让人往上找 -->
+                                                                                            <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                                                                                <Button Content="保存设置" Style="{StaticResource PrimaryButton}"
+                                                                                                Command="{Binding SaveSettingsCommand}" MinWidth="110" />
+                                                                                                <Button Content="恢复默认" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                                                                Command="{Binding ResetSettingsCommand}"
+                                                                                                ToolTip="把端口 / API Key / 路径恢复成默认值，并保存" />
+                                                                                            </StackPanel>
 
-                    <Border Grid.Row="1" Style="{StaticResource CardStyle}" Padding="8">
-                        <ListBox ItemsSource="{Binding Log}" BorderThickness="0" Background="Transparent"
-                                 FontFamily="Consolas, Microsoft YaHei UI" FontSize="12"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                 VirtualizingPanel.IsVirtualizing="True" />
-                    </Border>
-                </Grid>
-            </TabItem>
+                                                                                            <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,12,0,0">
+                                                                                                <TextBlock Text="{Binding SettingsDirtyHint}" Style="{StaticResource Sub}"
+                                                                                                    FontSize="12.5" TextWrapping="Wrap" />
+                                                                                                </Border>
+                                                                                                <TextBlock Style="{StaticResource Sub}" Margin="0,10,0,0">
+                                                                                                    <Run Text="别的开关（托盘常驻、开机自启、自动刷新）改了就是即时生效，不用点保存。" />
+                                                                                                    <LineBreak />
+                                                                                                    <Run Text="设置只保存在你自己的用户目录里，和服务程序的配置互不干扰。" />
+                                                                                                </TextBlock>
+                                                                                            </StackPanel>
+                                                                                        </Border>
 
-        </TabControl>
+                                                                                    </StackPanel>
+                                                                                </ScrollViewer>
+                                                                            </TabItem>
 
-        <!-- 底部状态栏 -->
-        <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0"
-                Padding="14,8">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
+                                                                                <!-- ══════════════ 日志 ══════════════ -->
+                                                                                <TabItem Header="  日志  ">
+                                                                                <Grid Margin="4,10,4,10">
+                                                                                    <Grid.RowDefinitions>
+                                                                                    <RowDefinition Height="Auto" />
+                                                                                    <RowDefinition Height="*" />
+                                                                                </Grid.RowDefinitions>
 
-                <StackPanel Grid.Column="0" Orientation="Horizontal">
-                    <!-- 一次性回执：左边加一个小圆点，一眼能看出“刚才做了个动作” -->
-                    <Ellipse Width="6" Height="6" VerticalAlignment="Center" Margin="0,0,8,0"
-                             Fill="{StaticResource Accent}"
-                             Visibility="{Binding StatusIsTransient, Converter={StaticResource BoolToVis}}" />
-                    <TextBlock Text="{Binding StatusDetail}" Style="{StaticResource Sub}"
-                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal"
-                            Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}">
-                    <TextBlock Text="{Binding BusyText}" Style="{StaticResource Sub}" VerticalAlignment="Center"
-                               Foreground="{StaticResource Accent}" />
-                </StackPanel>
-            </Grid>
-        </Border>
-    </Grid>
-</Window>
+                                                                                    <Border Grid.Row="0" Style="{StaticResource CardStyle}">
+                                                                                        <StackPanel Orientation="Horizontal">
+                                                                                            <TextBlock Text="程序与网关的输出" Style="{StaticResource H2}" Margin="0,0,16,0"
+                                                                                                VerticalAlignment="Center" />
+                                                                                                <Button Content="清空日志" Style="{StaticResource GhostButton}"
+                                                                                                Command="{Binding ClearLogCommand}" />
+                                                                                                <TextBlock Text="出问题了就把这里的内容截图发出来" Style="{StaticResource Sub}"
+                                                                                                    VerticalAlignment="Center" Margin="16,0,0,0" />
+                                                                                                </StackPanel>
+                                                                                            </Border>
+
+                                                                                            <Border Grid.Row="1" Style="{StaticResource CardStyle}" Padding="8">
+                                                                                                <ListBox ItemsSource="{Binding Log}" BorderThickness="0" Background="Transparent"
+                                                                                                FontFamily="Consolas, Microsoft YaHei UI" FontSize="12"
+                                                                                                ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                                                                                VirtualizingPanel.IsVirtualizing="True" />
+                                                                                            </Border>
+                                                                                        </Grid>
+                                                                                    </TabItem>
+
+                                                                                    </TabControl>
+
+                                                                                        <!-- 底部状态栏 -->
+                                                                                        <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0"
+                                                                                            Padding="14,8">
+                                                                                            <Grid>
+                                                                                                <Grid.ColumnDefinitions>
+                                                                                                <ColumnDefinition Width="*" />
+                                                                                                <ColumnDefinition Width="Auto" />
+                                                                                            </Grid.ColumnDefinitions>
+
+                                                                                                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                                                                                    <!-- 一次性回执：左边加一个小圆点，一眼能看出“刚才做了个动作” -->
+                                                                                                    <Ellipse Width="6" Height="6" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                                                                    Fill="{StaticResource Accent}"
+                                                                                                    Visibility="{Binding StatusIsTransient, Converter={StaticResource BoolToVis}}" />
+                                                                                                    <TextBlock Text="{Binding StatusDetail}" Style="{StaticResource Sub}"
+                                                                                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                                                                                    </StackPanel>
+                                                                                                    <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                                                                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}">
+                                                                                                        <TextBlock Text="{Binding BusyText}" Style="{StaticResource Sub}" VerticalAlignment="Center"
+                                                                                                            Foreground="{StaticResource Accent}" />
+                                                                                                        </StackPanel>
+                                                                                                    </Grid>
+                                                                                                </Border>
+                                                                                            </Grid>
+                                                                                        </Window>

@@ -178,7 +178,7 @@ public partial class MainWindow : Window
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "选择 node.exe",
+            Title = "选择运行环境程序",
             Filter = "可执行文件 (*.exe)|*.exe|所有文件 (*.*)|*.*",
             CheckFileExists = true,
         };
@@ -191,7 +191,7 @@ public partial class MainWindow : Window
     {
         var dialog = new Microsoft.Win32.OpenFolderDialog
         {
-            Title = "选择 workbuddy_api 目录（里面应该有 src\\bin.js）",
+            Title = "选择服务程序目录",
         };
 
         if (dialog.ShowDialog(this) != true) return;
@@ -203,7 +203,7 @@ public partial class MainWindow : Window
             if (found is null)
             {
                 MessageBox.Show(
-                    $"这个目录里找不到 src\\bin.js：\n{picked}\n\n请选 workbuddy_api 的根目录。",
+                    $"这个目录里不是服务程序：\n{picked}\n\n请选包含服务程序的目录。",
                     "WorkBuddy 控制台",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);

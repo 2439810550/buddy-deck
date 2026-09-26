@@ -185,5 +185,90 @@
             <Setter Property="Padding" Value="14,8" />
         </Style>
 
+        <!--
+            筛选胶囊（RadioButton 伪装成按钮）。
+
+            用 RadioButton 而不是 Button：筛选是“四选一”的状态，
+            单选钮天然带选区语义，键盘也能左右切。
+            按键还是不能取消选中（点两次不会变成没选）——这正是筛选想要的。
+        -->
+        <Style x:Key="FilterChip" TargetType="RadioButton">
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="Foreground" Value="{StaticResource TextSub}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Bd" CornerRadius="14" Padding="12,5"
+                                Background="Transparent"
+                                BorderBrush="{StaticResource Line}" BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#EDEFF3" />
+                            </Trigger>
+                            <!-- 选中：蓝底白字，一眼能看出当前在看哪个分类 -->
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource Accent}" />
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Accent}" />
+                                <Setter Property="Foreground" Value="White" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!--
+            搜索框。
+
+            带一个占位提示（WPF 的 TextBox 没有原生 placeholder，
+            用 Background 里的 VisualBrush 画一段灰字）。
+            只在文本为空时显示提示——绑定到 Text.IsEmpty 不方便，
+            所以用 TextBox 自己的 Text 触发器判断。
+        -->
+        <Style x:Key="SearchBox" TargetType="TextBox">
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="Padding" Value="9,5" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{StaticResource TextMain}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Bd" CornerRadius="7"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <Grid>
+                                <ScrollViewer x:Name="PART_ContentHost"
+                                              Margin="{TemplateBinding Padding}"
+                                              VerticalAlignment="Center" />
+                                <!-- 占位提示：文本框为空时显示 -->
+                                <TextBlock x:Name="Hint"
+                                           Text="搜索名字或 UID…"
+                                           Margin="{TemplateBinding Padding}"
+                                           VerticalAlignment="Center"
+                                           Foreground="#9CA3AF"
+                                           FontSize="12.5"
+                                           IsHitTestVisible="False"
+                                           Visibility="Collapsed" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Text" Value="">
+                                <Setter TargetName="Hint" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Accent}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
     </Application.Resources>
 </Application>

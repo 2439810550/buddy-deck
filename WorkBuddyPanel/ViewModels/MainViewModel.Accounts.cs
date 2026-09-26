@@ -38,6 +38,22 @@ public sealed class AccountRowVm : ObservableObject
 
     public string Id => _dto.Id ?? "";
 
+    /// <summary>
+    /// 把上一趟的签到/续期文字搬过来。
+    ///
+    /// 快速刷新（--no-checkin）拿不到签到状态，如果直接重建行，
+    /// 那两列会变成"签到状态读不到"——看起来像数据丢了。
+    /// 搬过来保住上一趟的值，等完整刷新再覆盖。
+    /// </summary>
+    internal void CarryOver(string checkin, string renew)
+    {
+        _carriedCheckin = checkin;
+        _carriedRenew = renew;
+    }
+
+    private string? _carriedCheckin;
+    private string? _carriedRenew;
+
     /// <summary>界面上的显示名：优先标签，其次昵称，最后 uid 前 8 位。</summary>
     public string Display
     {
@@ -79,7 +95,8 @@ public sealed class AccountRowVm : ObservableObject
         get
         {
             var checkin = _dto.Checkin;
-            if (checkin is null) return "签到状态读不到";
+            // 二趟刷新时先拿上一趟的值顶着（见 CarryOver）
+            if (checkin is null) return _carriedCheckin ?? "签到状态读不到";
             if (!checkin.Active) return "当前没有签到活动";
             return checkin.TodayCheckedIn
                 ? $"今天已签 · 连续 {checkin.StreakDays} 天 · 每天 +{checkin.DailyCredit}"
@@ -172,6 +189,25 @@ public sealed class AccountRowVm : ObservableObject
     }
 
     public bool NeedsRenew => _dto.RefreshDaysLeft is null or < 45;
+
+    /// <summary>
+    /// 今天还没签到。
+    ///
+    /// 筛选「今天没签」用 —— 漏签会断连续天数（混元那边连续签到有额外奖励）。
+    /// 拿不到签到状态时返回 false（不知道就别报警，免得筛选里全是误报）。
+    /// </summary>
+    public bool NeedsCheckinToday =>
+        _dto.Checkin is { Active: true, TodayCheckedIn: false };
+
+    /// <summary>
+    /// 状态读不全（拿不到积分 / 签到 / 有效期中的任何一项）。
+    ///
+    /// 筛选「有问题」用 —— 这种号看着正常，但实际可能已经掉登录了。
+    /// </summary>
+    public bool HasStatusProblem =>
+        _dto.Credits is null && !_dto.CreditsUnlimited
+        || _dto.Checkin is null
+        || _dto.RefreshDaysLeft is null;
 
     public string ErrorText => _dto.Error ?? "";
     public bool HasError => !string.IsNullOrEmpty(_dto.Error);
@@ -275,6 +311,30 @@ public sealed partial class MainViewModel
             RunTaskNowCommand?.RaiseCanExecuteChanged();
         }
     }
+
+    /// <summary>任务在正常工作（注册了、目标存在、上次跑成功）。</summary>
+    private bool _taskHealthy;
+    public bool TaskHealthy
+    {
+        get => _taskHealthy;
+        private set => Set(ref _taskHealthy, value);
+    }
+
+    /// <summary>
+    /// 任务需要关注（目标 exe 不在了 / 上次运行失败 / 很久没跑过）。
+    ///
+    /// 界面上拿它把状态文字标黄或标红 —— 让用户一眼看出
+    /// “看着已注册，其实根本不工作”。
+    /// </summary>
+    private bool _taskNeedsAttention;
+    public bool TaskNeedsAttention
+    {
+        get => _taskNeedsAttention;
+        private set => Set(ref _taskNeedsAttention, value);
+    }
+
+    /// <summary>状态文字的颜色：异常时标黄。</summary>
+    public string TaskStatusColor => _taskNeedsAttention ? "#D97706" : "#6B7280";
 
     private string _accountsSummary = "";
     public string AccountsSummary { get => _accountsSummary; private set => Set(ref _accountsSummary, value); }
@@ -408,7 +468,9 @@ public sealed partial class MainViewModel
 
     private void InitialiseAccounts()
     {
-        RefreshAccountsCommand = new AsyncRelayCommand(RefreshAccountsAsync, null, ReportError);
+        // RefreshAccountsAsync 现在带可选参数（fast），方法组不能直接匹配 Func<Task>，
+        // 得包一层 lambda 指定用完整模式（用户点刷新就是要看最新的）。
+        RefreshAccountsCommand = new AsyncRelayCommand(() => RefreshAccountsAsync(fast: false), null, ReportError);
         RefreshAccountsLightCommand = new AsyncRelayCommand(RefreshAccountsLightAsync, null, ReportError);
         ImportAccountCommand = new AsyncRelayCommand(ImportAccountAsync, null, ReportError);
         CheckinAllCommand = new AsyncRelayCommand(() => CheckinAccountsAsync(Accounts.ToList(), force: true), null, ReportError);
@@ -425,10 +487,20 @@ public sealed partial class MainViewModel
     private void RefreshTaskStatus() => _ = RefreshTaskStatusAsync();
 
     /// <summary>
-    /// 查计划任务状态。
+    /// 查计划任务状态 —— **不只查“注没注册”，还查“真的能跑吗”**。
     ///
-    /// 要走两次 schtasks（实测合计 ~53ms），以前是在构造函数里同步跑的 ——
-    /// 那就是窗口出现前的纯等待。现在丢后台，先显示“查询中…”，回来再填。
+    /// ## 为什么要查健康而不只查存在
+    ///
+    /// 实测踩到的场景：任务注册时指向 `publish.next\WorkBuddyPanel.exe`，
+    /// 后来那个目录被清空了。任务照样“已注册”，下次运行时间也正常，
+    /// **但每次触发都是静默失败** —— 账号一直在掉登录，没人知道。
+    ///
+    /// 界面当时只显示「已注册每日自动续期」，看着一切正常。
+    ///
+    /// 现在有三道检查（见 TaskHealth）：
+    ///   1. 目标 exe 还在不在（最常见的问题）
+    ///   2. 上次运行结果码
+    ///   3. 上次维护日志时间
     ///
     /// @returns 查完后的状态文字，调用方需要拿它拼结果就 await 一下
     /// </summary>
@@ -436,25 +508,70 @@ public sealed partial class MainViewModel
     {
         try
         {
-            var (registered, status) = await Task.Run(() =>
-            {
-                bool isRegistered = ScheduledTask.IsRegistered();
-                return (isRegistered, isRegistered
-                    ? $"已注册每日自动续期（{ScheduledTask.Describe()}），错过时间会在下次开机后补跑"
-                    : "未注册。不注册也能用，但你得自己记得定期点「续期」");
-            });
+            var health = await Task.Run(() => TaskHealth.Check());
+            var lastRun = await Task.Run(() => TaskHealth.LastMaintenance());
 
-            TaskRegistered = registered;
+            TaskRegistered = health.State != TaskHealth.State.NotRegistered;
+            TaskHealthy = health.IsWorking;
+            TaskNeedsAttention = health.NeedsAttention;
+
+            var lines = new List<string> { health.Summary };
+
+            // 上次真的跑成功了吗 —— 这一条最能说明问题。
+            //
+            // 光看任务状态不够：任务可以“成功执行”但程序内部失败。
+            // 看维护日志里那条 exit=0 才是真的跑通了。
+            if (lastRun is { } last)
+            {
+                // last.When 是 DateTime?（解析不到时间戳时为 null），
+                // 有值时才能算时间差
+                if (last.When is { } when)
+                {
+                    var span = DateTime.Now - when;
+                    var ago = FormatAgo(span);
+                    lines.Add(last.Ok
+                        ? $"上次维护：{when:MM-dd HH:mm}（{ago}前）"
+                        : $"⚠ 上次维护未成功：{when:MM-dd HH:mm}（{ago}前）");
+
+                    // 超过两天没跑过任何维护 —— 计划任务多半没生效
+                    if (span > TimeSpan.FromDays(2))
+                    {
+                        TaskNeedsAttention = true;
+                        lines.Add($"　 已经 {ago} 没有自动维护了，" +
+                                  "可能是任务没在跑、或者电脑那时没开机。");
+                    }
+                }
+
+                if (!last.Ok) TaskNeedsAttention = true;
+            }
+            else if (health.State == TaskHealth.State.Healthy)
+            {
+                lines.Add("还没跑过（下次到点会自动跑）");
+            }
+
+            var status = string.Join("\n", lines);
             TaskStatus = status;
             return status;
         }
         catch (Exception ex)
         {
             TaskRegistered = false;
+            TaskHealthy = false;
+            TaskNeedsAttention = false;
             var message = $"查询计划任务失败：{ex.Message}";
             TaskStatus = message;
             return message;
         }
+    }
+
+    /// <summary>把时长说成人话：3 分钟前 / 5 小时前 / 2 天前。</summary>
+    private static string FormatAgo(TimeSpan span)
+    {
+        if (span < TimeSpan.Zero) return "刚刚";
+        if (span.TotalMinutes < 1) return "刚刚";
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes} 分钟";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours} 小时";
+        return $"{(int)span.TotalDays} 天";
     }
 
     /// <summary>
@@ -792,7 +909,7 @@ public sealed partial class MainViewModel
     {
         if (!CanRunNode)
         {
-            const string skipped = "维护跳过：还没找到 node / workbuddy_api";
+            const string skipped = "维护跳过：运行环境还没配好";
             LogMaintenance(skipped);
             return skipped;
         }
@@ -872,33 +989,89 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>把保险库读进来，顺带拉积分和签到状态。</summary>
-    public async Task RefreshAccountsAsync()
+    /// <summary>
+    /// 读账号列表。
+    ///
+    /// ## 为什么分两趟
+    ///
+    /// 实测（14 个账号）：
+    ///
+    ///     accounts --json                10.5 秒
+    ///     accounts --json --no-checkin    5.0 秒
+    ///
+    /// 差的那 5 秒全花在**逐个账号问上游“今天签到了吗”**。
+    /// 启动时等 10 秒才看到列表，用户看到的是一片空白 —— 以为程序坏了。
+    ///
+    /// 所以：
+    ///   1. 先不查签到，快速拿到账号列表（名字、积分、到期天数都齐）
+    ///   2. 挂个后台任务再查一次签到，回来只更新那两列
+    ///
+    /// 用户感知：列表 5 秒就出来了，签到状态稍后自己填上。
+    ///
+    /// ## 为什么要传 skipCheckin 而不是写死
+    ///
+    /// 用户手动点「刷新」时应该等到完整数据（他就是要看最新的签到状态）。
+    /// 所以只有**启动那次**用快速模式。
+    /// </summary>
+    public async Task RefreshAccountsAsync(bool fast = false)
     {
         if (!CanRunNode)
         {
-            AccountsSummary = "还没找到 node / workbuddy_api，去「设置」点自动探测";
+            AccountsSummary = "还没找到运行环境或服务程序，去「设置」点自动探测";
+            AppendLog($"[账号] 跳过刷新：node={(ResolvedNodePath ?? "(无)")} api={(ResolvedApiDirectory ?? "(无)")}");
             return;
         }
 
         IsBusy = true;
-        BusyText = "正在读取账号…";
+        BusyText = fast ? "正在读取账号…" : "正在刷新账号（含签到状态）…";
         try
         {
-            var result = await CliRunner.RunAsync(
-                NodePath, ApiDirectory, $"src/bin.js accounts --json{ProviderArgs()}");
+            var extra = fast ? " --no-checkin" : "";
+            var command = $"src/bin.js accounts --json{ProviderArgs()}{extra}";
+            var result = await CliRunner.RunAsync(NodePath, ApiDirectory, command);
+
+            // 记账式日志：出问题时能直接看到命令、退出码、输出大小
+            AppendLog($"[账号] {command}  退出码={result.ExitCode}  输出={result.StdOut.Length} 字节");
+
             var json = CliRunner.ExtractJson(result.StdOut);
             if (json is null)
             {
                 AccountsSummary = "账号列表读不出来";
                 AccountsResult = string.IsNullOrWhiteSpace(result.Combined) ? "accounts 没有输出" : result.Combined;
+                AppendLog("[账号] 解析不出 JSON，原始输出前 300 字：" + result.Combined[..Math.Min(300, result.Combined.Length)]);
                 return;
             }
 
             var dto = JsonSerializer.Deserialize<AccountListDto>(json) ?? new AccountListDto();
             var rows = dto.Data ?? [];
 
-            Accounts.Clear();
-            foreach (var account in rows) Accounts.Add(new AccountRowVm(this, account));
+            // 保留已有的签到信息（如果是二趟刷新，第一趟已经拿到一些）——
+            // 避免快速刷新时把签到列清空、看起来像丢了数据。
+            var previous = Accounts.ToDictionary(
+                a => a.Id, a => (a.CheckinText, a.RenewText), StringComparer.Ordinal);
+
+            //
+            // ⚠ 必须在 UI 线程上改集合。
+            //
+            // ObservableCollection 绑定到界面后，它的 CollectionChanged 会直接
+            // 通知 CollectionView（WPF 的筛选/排序层）。从后台线程改会抛：
+            //
+            //     该类型的 CollectionView 不支持从调度线程以外的线程
+            //     对其 SourceCollection 进行的更改。
+            //
+            // 而且这个异常会被启动路径上的 fire-and-forget 吞掉，
+            // 表现是“账号列表永远空着” —— 很难查。
+            RunOnUiThread(() =>
+            {
+                Accounts.Clear();
+                foreach (var account in rows)
+                {
+                    var row = new AccountRowVm(this, account);
+                    if (fast && previous.TryGetValue(row.Id, out var prev))
+                        row.CarryOver(prev.CheckinText, prev.RenewText);
+                    Accounts.Add(row);
+                }
+            });
 
             var active = Accounts.FirstOrDefault(row => row.IsActive);
             AccountsSummary = Accounts.Count == 0
@@ -910,12 +1083,43 @@ public sealed partial class MainViewModel
             Raise(nameof(HasAccounts));
             Raise(nameof(HasNoAccounts));
             Raise(nameof(ActiveAccountText));
+
+            // 列表内容变了，筛选结果要重算 ——
+            // 否则「今天没签」这个筛选会停留在旧结果上。
+            RefreshAccountView();
         }
         finally
         {
             IsBusy = false;
             BusyText = "";
         }
+    }
+
+    /// <summary>
+    /// 启动时的账号加载：先快后补。
+    ///
+    /// 快速版先出列表，完整版（带签到）在后台跑 —— 不阻塞启动。
+    /// </summary>
+    public async Task RefreshAccountsAtStartupAsync()
+    {
+        // 第一趟：5 秒，列表出来
+        await RefreshAccountsAsync(fast: true);
+
+        // 第二趟：后台补签到，不 await（不挡启动流程）
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // 等一下再查 —— 启动时一堆东西在跑，缓一缓不抢资源
+                await Task.Delay(TimeSpan.FromSeconds(3));
+                await RefreshAccountsAsync(fast: false);
+            }
+            catch
+            {
+                // 后台补数据失败无所谓 —— 用户看到的列表是完整的，
+                // 只是签到列停留在上一趟的值
+            }
+        });
     }
 
     /// <summary>把桌面 App 现在登录的那个号存进保险库。</summary>

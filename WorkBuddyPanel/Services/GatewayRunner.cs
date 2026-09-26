@@ -45,11 +45,11 @@ public sealed partial class GatewayRunner : IDisposable
         if (IsRunning) return;
 
         if (!File.Exists(options.NodePath))
-            throw new FileNotFoundException($"找不到 node.exe：{options.NodePath}", options.NodePath);
+            throw new FileNotFoundException($"找不到运行环境程序：{options.NodePath}", options.NodePath);
 
         var binJs = CliRunner.DescribeApiDirectory(options.ApiDirectory);
         if (!File.Exists(binJs))
-            throw new FileNotFoundException($"找不到 workbuddy_api 的入口文件：{binJs}", binJs);
+            throw new FileNotFoundException($"找不到服务程序入口文件：{binJs}", binJs);
 
         var args = new StringBuilder();
         args.Append("src/bin.js serve");

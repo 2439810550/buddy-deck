@@ -336,7 +336,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public string SettingsDirtyHint => SettingsDirty
         ? "⚠ 有改动还没保存。点上面的「保存设置」，否则「启动网关」用的还是旧参数。"
-        : "改动会即时写入 settings.json；上面这几个（端口 / 版本 / 密钥 / 路径）改动后要点「保存设置」。";
+        : "上面这几个（端口 / 版本 / 密钥 / 路径）改完后要点「保存设置」。";
 
     /// <summary>把当前编辑中的值写进配置对象并落盘。</summary>
 
@@ -643,7 +643,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>当前用的 workbuddy_api 是从哪来的。</summary>
     public string ApiOriginText => ProcessLocator.ApiOrigin(ApiDirectory).Describe();
 
-    public string RuntimeSummary => $"Node.js 来源：{NodeOriginText}　·　workbuddy_api 来源：{ApiOriginText}";
+    public string RuntimeSummary => $"运行环境：{NodeOriginText}　·　服务程序：{ApiOriginText}";
 
     /// <summary>
     /// 界面上显示一个路径：填的是相对路径就补上「→ 实际指向哪里」，
@@ -663,11 +663,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             if (!AppSettings.IsReleaseBuild)
             {
-                return "调试版：路径留空即可，程序会自己去系统里找 Node.js，并从 exe 所在目录向上找 workbuddy_api 仓库。";
+                return "开发版：路径留空即可，程序会自己去找运行环境和服务程序。";
             }
 
-            return $"发布版默认：{AppSettings.DefaultNodePathRelative} 和 {AppSettings.DefaultApiDirectoryRelative}"
-                 + "（相对 exe 所在目录）。发布包里自带这两样，一般不用改。";
+            return "默认使用程序自带的环境，一般不用改。";
         }
     }
 
@@ -704,6 +703,24 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<EnvironmentCheckVm> EnvironmentChecks { get; } = [];
 
     /// <summary>重新跑一遍体检，把结果填进 EnvironmentChecks。</summary>
+    /// <summary>
+    /// 重新跑一遍体检，把结果填进 EnvironmentChecks。
+    ///
+    /// ⚠ 这个方法会在**后台线程**上被调用（`await Task.Run(RefreshEnvironment)`），
+    /// 但它改的 EnvironmentChecks 是绑定到界面的集合。
+    ///
+    /// WPF 的规则：绑定了界面的 ObservableCollection 只能在 UI 线程上改。
+    /// 从后台线程改会抛：
+    ///
+    ///     该类型的 CollectionView 不支持从调度线程以外的线程
+    ///     对其 SourceCollection 进行的更改。
+    ///
+    /// 而且这个异常会被启动路径上的 fire-and-forget 吞掉，
+    /// 表现是“界面出来了但什么都不加载”—— 实测踩过。
+    ///
+    /// 所以这里分段：计算部分留在后台（不碰界面属性），
+    /// 写集合的时候切回 UI 线程。
+    /// </summary>
     public void RefreshEnvironment()
     {
         var checks = new List<EnvironmentCheckVm>();
@@ -712,34 +729,67 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         checks.Add(new EnvironmentCheckVm(".NET 运行时", true,
             $"已加载 {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}"));
 
-        // ② 自带的便携版 Node
+        // ② 自带的运行环境
         var bundledNode = ProcessLocator.BundledNodePath;
-        checks.Add(new EnvironmentCheckVm("自带的 Node.js", File.Exists(bundledNode),
+        checks.Add(new EnvironmentCheckVm("自带的运行环境", File.Exists(bundledNode),
             File.Exists(bundledNode)
-                ? bundledNode
+                ? "就绪"
                 : $"不在 {bundledNode}（如果这个包本该自带，说明文件被删了）"));
 
-        // ③ 自带的 workbuddy_api
+        // ③ 自带的服务程序
         var bundledApi = ProcessLocator.BundledApiDirectory;
         var bundledApiOk = File.Exists(Path.Combine(bundledApi, "src", "bin.js"));
-        checks.Add(new EnvironmentCheckVm("自带的 workbuddy_api", bundledApiOk,
-            bundledApiOk ? bundledApi : $"不在 {bundledApi}"));
+        checks.Add(new EnvironmentCheckVm("自带的服务程序", bundledApiOk,
+            bundledApiOk ? "就绪" : $"不在 {bundledApi}"));
 
-        // ④ 实际会用的 node
+        // ④ 实际会用的运行环境
         //    这里报**展开后**的绝对路径：发布版默认填的是 .\runtime\node.exe，
         //    只显示相对路径的话，用户没法确认它到底指向哪里。
-        checks.Add(new EnvironmentCheckVm("实际使用的 node.exe", CanRunNode && !string.IsNullOrEmpty(NodePath),
+        checks.Add(new EnvironmentCheckVm("实际使用的运行环境", CanRunNode && !string.IsNullOrEmpty(NodePath),
             string.IsNullOrEmpty(NodePath) ? "没找到（自带的和系统装的都没有）" : $"{DescribePath(NodePath)}（{NodeOriginText}）"));
 
-        // ⑤ 实际会用的 workbuddy_api
-        checks.Add(new EnvironmentCheckVm("实际使用的 workbuddy_api", CanRunNode && !string.IsNullOrEmpty(ApiDirectory),
+        // ⑤ 实际会用的服务程序
+        checks.Add(new EnvironmentCheckVm("实际使用的服务程序", CanRunNode && !string.IsNullOrEmpty(ApiDirectory),
             string.IsNullOrEmpty(ApiDirectory) ? "没找到" : $"{DescribePath(ApiDirectory)}（{ApiOriginText}）"));
 
-        EnvironmentChecks.Clear();
-        foreach (var check in checks) EnvironmentChecks.Add(check);
+        // 计算好了，写集合要切回 UI 线程
+        RunOnUiThread(() =>
+        {
+            EnvironmentChecks.Clear();
+            foreach (var check in checks) EnvironmentChecks.Add(check);
+        });
 
         Raise(nameof(HasEnvironmentProblem));
         Raise(nameof(PathsHint));
+    }
+
+    /// <summary>
+    /// 在 UI 线程上执行一段代码。
+    ///
+    /// 已经在 UI 线程上就直接跑（避免无谓的调度开销）；
+    /// 不在就丢到 Dispatcher 里并等它做完。
+    ///
+    /// 为什么要"等"：调用方（比如 RefreshEnvironment）后面还要用集合的结果，
+    /// 不等的话会先返回、状态显示成旧的。
+    /// </summary>
+    private static void RunOnUiThread(Action action)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+
+        // 没有 Application（单元测试、纯命令行调用）—— 直接跑
+        if (dispatcher is null)
+        {
+            action();
+            return;
+        }
+
+        if (dispatcher.CheckAccess())
+        {
+            action();
+            return;
+        }
+
+        dispatcher.Invoke(action);
     }
 
     /// <summary>体检结果里“缺了什么”，给首页那张警告卡用。</summary>
@@ -753,10 +803,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
             var missing = new List<string>();
             if (string.IsNullOrEmpty(NodePath) || ResolvedNodePath is not { } node || !File.Exists(node))
-                missing.Add("Node.js");
+                missing.Add("运行环境");
             if (string.IsNullOrEmpty(ApiDirectory) || ResolvedApiDirectory is not { } api ||
                 !File.Exists(CliRunner.DescribeApiDirectory(api)))
-                missing.Add("workbuddy_api");
+                missing.Add("服务程序");
 
             var text = $"缺 {string.Join(" 和 ", missing)}。";
 
@@ -766,17 +816,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
             if (bundledNodeOk || bundledApiOk)
             {
-                text += "自带的运行时还在，点「自动探测」应该能找回来。";
+                text += "自带的还在，点「自动探测」应该能找回来。";
             }
             else if (Directory.Exists(ProcessLocator.RuntimeRoot))
             {
-                text += "runtime 目录下没有可用的文件 —— 可能是被删了或被杀软拦了。"
-                     + "重新解压一次发布包，或者在「设置」里手动指定。";
+                text += "程序目录下的环境文件不完整 —— 可能是被删了或被杀软拦了。"
+                     + "重新解压一次，或者在「设置」里手动指定。";
             }
             else
             {
-                text += "这个发布包里没有 runtime 目录，需要自己装 Node.js 20.10+（https://nodejs.org/），"
-                     + "或者在「设置」里指定已有的 node.exe。";
+                text += "这个包没有自带运行环境，需要自己装一个，"
+                     + "或者在「设置」里指定已有的。";
             }
 
             return text;
@@ -819,7 +869,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // 现在并行，总耗时看最慢的那一个（账号列表 1.9s），而且全程不卡界面。
         await Task.WhenAll(
             RefreshClientsAsync(),
-            RefreshAccountsAsync(),
+            // 账号用「先快后补」：先 --no-checkin（5 秒出列表），
+            // 签到状态后台再查（完整查询要 10 秒，等它启动会很慢）
+            RefreshAccountsAtStartupAsync(),
             RefreshStatusAsync(),
             RefreshModelsAsync());
 
@@ -859,8 +911,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _suppressDirty = false;
         }
 
-        AppendLog($"node.exe：{NodePath ?? "(没找到)"}　来源：{NodeOriginText}");
-        AppendLog($"workbuddy_api：{ApiDirectory ?? "(没找到)"}　来源：{ApiOriginText}");
+        AppendLog($"运行环境：{NodePath ?? "(没找到)"}　来源：{NodeOriginText}");
+        AppendLog($"服务程序：{ApiDirectory ?? "(没找到)"}　来源：{ApiOriginText}");
         RaiseDerived();
 
         // 探测结果直接落盘，下次启动不用再找一遍
@@ -880,7 +932,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (int.TryParse(Port, out var p) && p is > 0 and <= 65535) _settings.Port = p;
         _settings.Save();
         SettingsDirty = false;
-        AppendLog("设置已保存到 %APPDATA%\\WorkBuddyPanel\\settings.json");
+        AppendLog("设置已保存。");
     }
 
     /// <summary>把需要保存的那几个恢复成默认值（并落盘）。</summary>
@@ -936,6 +988,31 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     // ── 网关启停 ───────────────────────────────────────────────
+
+    /// <summary>
+    /// 这个端口上跑的是不是 WorkBuddy 网关。
+    ///
+    /// 判断依据：我们的 `/healthz` 会回 `{"ok":true,"provider":"workbuddy",…}`。
+    /// 别的程序不会碰巧返回这个结构，所以这个判据足够。
+    ///
+    /// 超时给得很短（800ms）—— 如果对方不是 HTTP 服务，连接会很快被拒；
+    /// 如果是 HTTP 但不响应，也不该让启动流程卡住。
+    /// </summary>
+    private static async Task<bool> IsOurGatewayOnPortAsync(int port)
+    {
+        try
+        {
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMilliseconds(800) };
+            var body = await http.GetStringAsync($"http://127.0.0.1:{port}/healthz");
+            return body.Contains("\"ok\"", StringComparison.Ordinal)
+                && body.Contains("workbuddy", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// 启动网关。失败时抛异常，由调用方决定是弹窗（用户手点）还是只写日志（开机自启）。
     /// </summary>
@@ -944,17 +1021,40 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (!CanRunNode)
         {
             throw new InvalidOperationException(
-                "路径没配好。到「设置」标签页点「自动探测」，或手动指定 node.exe 和 workbuddy_api 目录。");
+                "路径没配好。到「设置」标签页点「自动探测」，或手动指定运行环境和服务程序。");
         }
 
         if (!int.TryParse(Port, out var port) || port is < 0 or > 65535)
             throw new InvalidOperationException($"端口号不对：{Port}");
 
+        //
+        // 端口被占 —— 但要先分清"谁在占"：
+        //
+        //   ① 是本程序启动的网关（或另一个实例启的）
+        //      → 正常。直接当"已在运行"，不报错
+        //
+        //   ② 是别的程序（或者上次异常退出留下的脏进程）
+        //      → 才是真问题，要告诉用户怎么办
+        //
+        // 之前不看是①还是②，只要端口被占就报"没关干净、请重启电脑"。
+        // 实际常见的情况是①：比如用户开了两个面板实例、或者另一个工具在用同一端口。
+        // 实测就误报过 —— 看到"端口被占"但网关其实在健康运行。
+        //
         if (port != 0 && CliRunner.IsPortInUse(port))
+        {
+            if (await IsOurGatewayOnPortAsync(port))
+            {
+                // 自己人，当它已经在跑
+                AppendLog($"端口 {port} 上已经有网关在运行，直接采用它。");
+                IsGatewayRunning = true;
+                return;
+            }
+
             throw new InvalidOperationException(
                 $"端口 {port} 已经被别的程序占用了。\n\n" +
                 "可能是之前启动的网关没关干净（比如上次程序被强制结束）。\n" +
                 "解决办法：在「设置」里把端口改成别的（比如 8788），或者重启电脑。");
+        }
 
         SaveSettings();
         ClearLogInternal();
@@ -1052,6 +1152,53 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var stamp = DateTime.Now.ToString("HH:mm:ss");
         Log.Add($"[{stamp}] {line}");
         while (Log.Count > 2000) Log.RemoveAt(0);
+
+        // 同时落盘。
+        //
+        // 以前日志只在内存里，用户报问题、或者我自己排查时都看不到。
+        // 只写追加一个文件，开销很小。
+        // 单独一个文件，不和维护日志混在一起 —— 那个是给计划任务用的。
+        WriteUiLog($"[{stamp}] {line}");
+    }
+
+    /// <summary>
+    /// 从外部（比如 App 的启动异常处理）往界面日志里写一行。
+    ///
+    /// 为什么需要：启动流程抛异常时，ViewModel 可能还没建好，
+    /// 但用户需要看到“到底怎么了”——而且得先落盘再说话。
+    /// </summary>
+    public void AppendExternalLog(string line) => AppendLog(line);
+
+    private static readonly object UiLogGate = new();
+
+    private static void WriteUiLog(string line)
+    {
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "WorkBuddyPanel");
+            Directory.CreateDirectory(dir);
+
+            var path = Path.Combine(dir, "ui.log");
+
+            // 超过 1MB 就截掉一半 —— 长时间开着不至于无限增长
+            var info = new FileInfo(path);
+            if (info.Exists && info.Length > 1_000_000)
+            {
+                var lines = File.ReadAllLines(path);
+                File.WriteAllLines(path, lines.Skip(lines.Length / 2));
+            }
+
+            lock (UiLogGate)
+            {
+                File.AppendAllText(path, line + Environment.NewLine, System.Text.Encoding.UTF8);
+            }
+        }
+        catch
+        {
+            // 日志写不了不能影响主流程
+        }
     }
 
     private void ClearLogInternal() => Log.Clear();
@@ -1132,7 +1279,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         ModelCountText = dto.Catalog?.Count?.ToString(CultureInfo.InvariantCulture) ?? "—";
 
-        StatusDetail = $"账号来源：{dto.Source ?? "—"}　域名：{dto.Domain ?? "—"}　状态目录：{dto.StateHome ?? "—"}";
+        // 状态文字 —— 只说用户看得懂的东西。
+        //
+        // 以前写的是：账号来源：vault　域名：www.workbuddy.cn　状态目录：C:\Users\...\.workbuddy-api
+        // 其中 vault / 状态目录 / 那个内部路径都不该暴露 ——
+        // 用户不需要知道底层怎么存的。
+        var account = dto.Nickname ?? dto.Email;
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(account)) parts.Add(account);
+        if (!string.IsNullOrWhiteSpace(dto.Domain)) parts.Add(dto.Domain);
+        if (dto.Credits is { } remainingCredits) parts.Add($"{remainingCredits:0.##} 积分");
+
+        StatusDetail = parts.Count > 0
+            ? $"已登录：{string.Join("　·　", parts)}"
+            : "已登录";
     }
 
     private async Task RefreshModelsAsync()

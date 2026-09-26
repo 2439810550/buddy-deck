@@ -18,6 +18,31 @@ public static class ScheduledTask
     public const string TaskName = "WorkBuddyPanel 每日自动续期";
     private const string DailyTime = "12:00";
 
+    /// <summary>
+    /// 读 schtasks 输出用的编码：系统 ANSI 代码页。
+    ///
+    /// .NET Core/5+ 默认不带非 Unicode 代码页（无 GBK），
+    /// 必须先注册 CodePagesEncodingProvider，否则 GetEncoding 抛
+    /// NotSupportedException: No data is available for encoding 936。
+    ///
+    /// 注册是幂等的，静态构造只跑一次。
+    /// </summary>
+    private static readonly Encoding AnsiEncoding = CreateAnsiEncoding();
+
+    private static Encoding CreateAnsiEncoding()
+    {
+        try
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            return Encoding.GetEncoding(System.Globalization.CultureInfo.CurrentCulture.TextInfo.ANSICodePage);
+        }
+        catch
+        {
+            // 拿不到就退回 UTF-8 —— 至少不抛异常（英文系统本来也没区别）
+            return new UTF8Encoding(false);
+        }
+    }
+
     /// <summary>任务是否已注册。</summary>
     public static bool IsRegistered()
     {
@@ -53,6 +78,26 @@ public static class ScheduledTask
         catch
         {
             return "(查询失败)";
+        }
+    }
+
+    /// <summary>
+    /// 把 `schtasks /query /v` 的**原始输出**给调用方。
+    ///
+    /// 供 TaskHealth 解析 —— 它要看的字段比 Describe() 多
+    /// （目标路径、上次运行结果/时间、下次运行时间）。
+    /// 失败时返回空串（不抛）。
+    /// </summary>
+    public static string QueryVerboseText()
+    {
+        try
+        {
+            var result = Run($"/Query /TN \"{TaskName}\" /FO LIST /V");
+            return result.ExitCode == 0 ? result.StdOut : "";
+        }
+        catch
+        {
+            return "";
         }
     }
 
@@ -177,8 +222,29 @@ public static class ScheduledTask
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
+
+            //
+            // 必须用系统 ANSI 编码读 —— schtasks 输出的是本地代码页（中文系统 = GBK），
+            // 不是 UTF-8。
+            //
+            // 之前写死 Encoding.UTF8，中文系统的标签会变成乱码：
+            //   实际输出： 要运行的任务: D:\...\app.exe --maintain
+            //   UTF-8 解码：“�要运行的任务” 之类 —— StartsWith 匹配不上
+            //
+            // 后果：任务健康检查查不到目标路径和上次运行结果，
+            // 任务明明已经失败了，界面却显示“正常”。
+            // （实测抓住：任务错误码 -2147024894 = 0x80070002“找不到文件”，
+            //   但解析全空，状态判定成 Healthy）
+            //
+            //
+            // 实测对照（同一台机器、同一个任务）：
+            //
+            //     UTF8         →  ✗ “要运行的任务” 匹配不到（乱码）
+            //     GBK(936)     →  ✓ 正确解出中文标签和值
+            //     Default      →  ✗ 不行（.NET Core 上 Default 就是 UTF-8）
+            //
+            StandardOutputEncoding = AnsiEncoding,
+            StandardErrorEncoding = AnsiEncoding,
         };
 
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("启动 schtasks.exe 失败");

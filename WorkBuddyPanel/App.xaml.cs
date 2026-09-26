@@ -8,8 +8,8 @@ namespace WorkBuddyPanel;
 
 public partial class App : Application
 {
-    private const string MutexName = @"Local\WorkBuddyPanel.SingleInstance";
-    private const string ShowSignalName = @"Local\WorkBuddyPanel.ShowWindow";
+    private const string MutexName = @"Local\WorkBuddyPanel.SingleInstance.UiTest";
+    private const string ShowSignalName = @"Local\WorkBuddyPanel.ShowWindow.UiTest";
 
     private MainWindow? _window;
     private TrayIcon? _tray;
@@ -147,7 +147,35 @@ public partial class App : Application
 
         if (!StartHidden && !MaintainOnly) _window.Show();
 
-        _ = _window.StartAsync(StartHidden || MaintainOnly);
+        // 启动流程的异常不能丢。
+        //
+        // 以前是 `_ = _window.StartAsync(...)` —— fire-and-forget，
+        // InitializeAsync 里任何异常都被静默吞掉。
+        //
+        // 表现很迷惑：窗口出来了，但账号列表永远空着、日志页什么都没有 ——
+        // 因为初始化在抛异常那一步就停了，而用户（和开发者）都看不到错。
+        // 实测就是这么晴掉的：一个异常导致账号列表一直加载不出来。
+        _ = StartAsyncSafely();
+    }
+
+    private async Task StartAsyncSafely()
+    {
+        try
+        {
+            await _window!.StartAsync(StartHidden || MaintainOnly);
+        }
+        catch (Exception ex)
+        {
+            // 记完整堆栈 —— 只记 Message 的话看不出是哪一行、哪个线程
+            MainViewModel.WriteMaintenanceLog("[启动异常] " + ex);
+            try { _window?.ViewModel.AppendExternalLog($"[启动] 失败：{ex.Message}\n{ex.StackTrace}"); } catch { }
+
+            MessageBox.Show(
+                $"程序启动时出错了：\n\n{ex.Message}\n\n" +
+                "详情已经写进日志（「日志」标签页、或 %APPDATA%\\WorkBuddyPanel\\ui.log）。",
+                "WorkBuddy 控制台 — 启动失败",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void SetAutoStart(bool enabled)
