@@ -653,18 +653,61 @@
                                                     </StackPanel>
 
                                                     <StackPanel Grid.Column="1" VerticalAlignment="Top">
-                                                        <Button Content="设为使用中" Style="{StaticResource PrimaryButton}" MinWidth="96"
-                                                                Command="{Binding UseCommand}" />
-                                                        <Button Content="续期 + 签到" Style="{StaticResource GhostButton}" MinWidth="96" Margin="0,6,0,0"
+                                                        <!--
+                                                            右侧操作。
+
+                                                            只放两个最常用的，其余收进菜单 ——
+                                                            以前竖排 5 个按钮，每个账号占半屏高，账号一多就得一直滑。
+
+                                                            「设为使用中」是切换网关用哪个号，用得最多；
+                                                            「续期 + 签到」是日常维护动作。
+                                                            其余三个（只续期 / 重命名 / 删除）都是低频操作。
+                                                        -->
+                                                        <Button Content="设为使用中" Style="{StaticResource PrimaryButton}" MinWidth="92"
+                                                                Command="{Binding UseCommand}"
+                                                                ToolTip="让网关用这个账号" />
+
+                                                        <Button Content="续期+签到" Style="{StaticResource GhostButton}" MinWidth="88" Margin="0,6,0,0"
                                                                 Command="{Binding CheckinCommand}"
-                                                                ToolTip="只处理这一个账号：发刷新请求把有效期推后，并签到。" />
-                                                        <Button Content="只续期" Style="{StaticResource GhostButton}" MinWidth="96" Margin="0,6,0,0"
-                                                                Command="{Binding RenewCommand}"
-                                                                ToolTip="只处理这一个账号：发刷新请求把登录有效期推后，不签到。" />
-                                                        <Button Content="重命名" Style="{StaticResource GhostButton}" MinWidth="96" Margin="0,6,0,0"
-                                                                Command="{Binding RenameCommand}" />
-                                                        <Button Content="删除" Style="{StaticResource DangerButton}" MinWidth="96" Margin="0,6,0,0"
-                                                                Command="{Binding RemoveCommand}" />
+                                                                ToolTip="给这个账号续期，并签到" />
+
+                                                        <!--
+                                                            「更多」菜单。
+
+                                                            为什么用 Menu 而不是 ContextMenu：
+
+                                                            ContextMenu 有两个坑：
+                                                            一、不在可视树里 —— 它的 DataContext 不会从按钮继承，
+                                                            写普通的 Command 绑定拿到 null，菜单能弹出来但点了没反应。
+                                                            二、默认只右键弹 —— 用户点「⋯」期望左键弹出来。
+
+                                                            Menu + MenuItem 没这两个问题。
+                                                        -->
+                                                        <Menu Background="Transparent" Margin="0,6,0,0"
+                                                              HorizontalAlignment="Stretch">
+                                                            <MenuItem Padding="0" Background="Transparent"
+                                                                      HorizontalContentAlignment="Center"
+                                                                      ToolTip="更多操作">
+                                                                <MenuItem.Header>
+                                                                    <Border MinWidth="96" MinHeight="30"
+                                                                            Background="White" CornerRadius="6"
+                                                                            BorderBrush="{StaticResource Line}" BorderThickness="1">
+                                                                        <TextBlock Text="更多" FontSize="12.5"
+                                                                                   Foreground="{StaticResource TextMain}"
+                                                                                   HorizontalAlignment="Center"
+                                                                                   VerticalAlignment="Center" />
+                                                                    </Border>
+                                                                </MenuItem.Header>
+
+                                                                <MenuItem Header="只续期（不签到）"
+                                                                          Command="{Binding RenewCommand}" />
+                                                                <MenuItem Header="重命名"
+                                                                          Command="{Binding RenameCommand}" />
+                                                                <Separator />
+                                                                <MenuItem Header="删除这个账号"
+                                                                          Command="{Binding RemoveCommand}" />
+                                                            </MenuItem>
+                                                        </Menu>
                                                     </StackPanel>
                                                 </Grid>
                                             </Border>
