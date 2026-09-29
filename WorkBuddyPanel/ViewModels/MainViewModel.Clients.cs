@@ -248,12 +248,30 @@ public sealed partial class MainViewModel
         }
     }
 
-    /// <summary>当前该让客户端指向哪里。网关没起时用配置里的端口拼一个，至少不会拼出空地址。</summary>
+    /// <summary>
+    /// 当前该让客户端指向哪里。
+    ///
+    /// ── 为什么必须跟池走 ────────────────────────────────────
+    ///
+    /// 以前这里直接读主编的 BaseUrl / ApiKey —— 那两个永远是默认池的。
+    /// 于是切到志强池后点「一键接入」，写进 Claude Code / Codex / pi
+    /// 的配置是**默认池**的地址和 key：用户以为配的是志强池，实际配了默认池。
+    /// 一个界面里两处说法不一致，实测就是这么撞的。
+    /// </summary>
     public GatewayEndpoint CurrentEndpoint()
     {
-        var baseUrl = !string.IsNullOrWhiteSpace(BaseUrl)
-            ? BaseUrl
-            : $"http://127.0.0.1:{(int.TryParse(Port, out var p) && p > 0 ? p : 8787)}/v1";
+        // 当前池的地址（默认池就是主编那个，行为不变）
+        string baseUrl;
+        if (SelectedPool is { IsDefault: false } pool)
+        {
+            baseUrl = $"http://127.0.0.1:{pool.Port}/v1";
+        }
+        else
+        {
+            baseUrl = !string.IsNullOrWhiteSpace(BaseUrl)
+                ? BaseUrl
+                : $"http://127.0.0.1:{(int.TryParse(Port, out var p) && p > 0 ? p : 8787)}/v1";
+        }
 
         var model = IntegrateModel?.Id;
         if (string.IsNullOrWhiteSpace(model)) model = SelectedModel?.Id;
@@ -262,7 +280,8 @@ public sealed partial class MainViewModel
             // 没手动选过就按网关自己的规矩来：优先免费的
             model = Models.FirstOrDefault(m => m.Rate == "x0.00")?.Id ?? Models.FirstOrDefault()?.Id ?? "";
         }
-        return GatewayEndpoint.From(baseUrl, ApiKey, model);
+
+        return GatewayEndpoint.From(baseUrl, CurrentApiKey, model);
     }
 
     /// <summary>
@@ -277,12 +296,17 @@ public sealed partial class MainViewModel
             return;
         }
 
-        if (!IsGatewayRunning)
+        // 确保**当前看的那一个池**在跑（不是默认池）。
+        //
+        // 以前这里查的是 IsGatewayRunning —— 那是主编（默认池）的状态。
+        // 切到志强池时志强池没跑，但它会以为跑着，于是直接往下配，
+        // 配出一个连不通的地址。
+        if (!CurrentPoolRunning)
         {
-            var started = await TryStartGatewayAsync();
+            var started = await TryStartCurrentPoolAsync();
             if (!started)
             {
-                IntegrateResult = "网关没起来，先修好网关再配客户端（看「日志」标签页）。";
+                IntegrateResult = $"「{CurrentPoolLabel}」的网关没起来，先把它启动再配客户端（看「日志」标签页）。";
                 await RefreshClientsAsync();
                 return;
             }

@@ -1113,6 +1113,36 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// 确保**当前看的那一个池**在跑。默认池就走原来的路径。
+    ///
+    /// 「一键接入」用它 —— 以前那里查的是 IsGatewayRunning（主编的状态），
+    /// 切到别的池时会误以为网关已经在跑。
+    /// </summary>
+    public async Task<bool> TryStartCurrentPoolAsync()
+    {
+        if (CurrentPoolRunning) return true;
+        if (!CanRunNode) return false;
+
+        if (SelectedPool is null)
+        {
+            // 默认池：原来的路径
+            return await TryStartGatewayAsync();
+        }
+
+        try
+        {
+            await ToggleCurrentGatewayAsync();
+            return CurrentPoolRunning;
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[静默启动失败] 「{CurrentPoolLabel}」：{ex.Message}");
+            StatusDetail = $"「{CurrentPoolLabel}」启动失败：{ex.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>
     /// 给开机自启用的静默启动：失败只写日志，不弹窗（用户还没看着屏幕呢）。
     /// </summary>
     public async Task<bool> TryStartGatewayAsync()

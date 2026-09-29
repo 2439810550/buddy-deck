@@ -24,22 +24,44 @@
                         <!-- 网关开关 -->
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel>
-                                <TextBlock Text="本地网关" Style="{StaticResource H1}" />
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="本地网关" Style="{StaticResource H1}" />
+                                    <!--
+                                        提示当前看的是哪个池。
+
+                                        两个池可以同时跑，所以必须说清楚下面那几个
+                                        数字属于哪个池 —— 否则用户会以为改了志强池的
+                                        key，默认池也跟着变了。
+
+                                        默认池时不显示（只用一个池的人看不到「池」字样）。
+                                    -->
+                                    <Border Background="#EAF3FF" CornerRadius="4" Padding="8,2"
+                                            Margin="12,0,0,0" VerticalAlignment="Center"
+                                            Visibility="{Binding HomeShowingNonDefaultPool, Converter={StaticResource BoolToVis}}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="正在看：" FontSize="12"
+                                                       Foreground="#1E6FD9" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding CurrentPoolLabel}" FontSize="12"
+                                                       FontWeight="SemiBold" Foreground="#1E6FD9"
+                                                       VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,4,0,14">
                                     <Ellipse Width="14" Height="14" VerticalAlignment="Center"
-                                             Fill="{Binding GatewayStateBrush}" />
-                                    <TextBlock Text="{Binding GatewayStateText}" FontSize="17" FontWeight="SemiBold"
+                                             Fill="{Binding CurrentGatewayStateBrush}" />
+                                    <TextBlock Text="{Binding CurrentGatewayStateText}" FontSize="17" FontWeight="SemiBold"
                                                Margin="8,0,0,0" VerticalAlignment="Center"
-                                               Foreground="{Binding GatewayStateBrush}" />
+                                               Foreground="{Binding CurrentGatewayStateBrush}" />
                                     <TextBlock Text="  —  启动后，任何支持 OpenAI 接口的软件都能用 WorkBuddy 的模型"
                                                Style="{StaticResource Sub}" VerticalAlignment="Center" />
                                 </StackPanel>
 
                                 <StackPanel Orientation="Horizontal">
-                                    <Button Content="启动网关" Style="{StaticResource PrimaryButton}"
-                                            Command="{Binding StartGatewayCommand}" MinWidth="110" />                                    <Button Content="停止" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                            Command="{Binding StopGatewayCommand}" MinWidth="80" />
+                                    <Button Content="{Binding ToggleCurrentGatewayText}"
+                                            Style="{StaticResource PrimaryButton}"
+                                            Command="{Binding ToggleCurrentGatewayCommand}" MinWidth="110" />
                                     <Button Content="刷新账号信息" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
                                             Command="{Binding RefreshStatusCommand}" />
                                     <Button Content="一键体检" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
@@ -48,7 +70,12 @@
                                             Command="{Binding AutoDetectAllCommand}" />
                                 </StackPanel>
 
-                                <TextBlock Text="{Binding StatusDetail}" Style="{StaticResource Sub}" Margin="0,12,0,0" />
+                                <!-- 其他在跑的池 —— 提示一句，不抢焦点 -->
+                                <TextBlock Text="{Binding OtherRunningPoolsText}" Style="{StaticResource Sub}"
+                                           Margin="0,10,0,0"
+                                           Visibility="{Binding HasOtherRunningPools, Converter={StaticResource BoolToVis}}" />
+
+                                <TextBlock Text="{Binding StatusDetail}" Style="{StaticResource Sub}" Margin="0,8,0,0" />
                             </StackPanel>
                         </Border>
 
@@ -64,9 +91,9 @@
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <TextBox Grid.Column="0" Style="{StaticResource ReadOnlyValue}"
-                                             Text="{Binding BaseUrl, Mode=OneWay}" />
+                                             Text="{Binding CurrentBaseUrl, Mode=OneWay}" />
                                     <Button Grid.Column="1" Content="复制" Style="{StaticResource GhostButton}"
-                                            Margin="8,0,0,0" Command="{Binding CopyBaseUrlCommand}" />
+                                            Margin="8,0,0,0" Command="{Binding CopyCurrentBaseUrlCommand}" />
                                 </Grid>
 
                                 <TextBlock Text="API Key" Style="{StaticResource Field}" Margin="0,12,0,3" />
@@ -76,13 +103,15 @@
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <TextBox Grid.Column="0" Style="{StaticResource ReadOnlyValue}"
-                                             Text="{Binding ApiKey, Mode=OneWay}" />
+                                             Text="{Binding CurrentApiKey, Mode=OneWay}" />
                                     <Button Grid.Column="1" Content="复制" Style="{StaticResource GhostButton}"
-                                            Margin="8,0,0,0" Command="{Binding CopyApiKeyCommand}" />
+                                            Margin="8,0,0,0" Command="{Binding CopyCurrentApiKeyCommand}" />
                                 </Grid>
 
                                 <TextBlock Style="{StaticResource Sub}" Margin="0,12,0,0">
-                                    <Run Text="没启动网关时 Base URL 是空的。先点最上面的「启动网关」。" />
+                                    <Run Text="上面这两行属于" />
+                                    <Run Text="{Binding HomePoolLabel, Mode=OneWay}" FontWeight="SemiBold" />
+                                    <Run Text="，复制给对应的客户端用。" />
                                 </TextBlock>
                             </StackPanel>
                         </Border>

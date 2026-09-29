@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Media;
 using WorkBuddyPanel.Services;
 
 namespace WorkBuddyPanel.ViewModels;
@@ -354,7 +355,7 @@ public sealed partial class MainViewModel
     /// <summary>分池页顶部的说明（一般是一句当前状态）。</summary>
     public string PoolsSummary { get; private set; } = "";
 
-    /// <summary>当前正在「管理账号」的那个池（账号页会显示它的名字）。</summary>
+    /// <summary>当前选中的池（没选 = 默认池）。</summary>
     public PoolRowVm? SelectedPool { get; private set; }
 
     public bool HasSelectedPool => SelectedPool is not null;
@@ -365,6 +366,151 @@ public sealed partial class MainViewModel
 
     /// <summary>非默认池时界面会显示「回到默认池」按钮。</summary>
     public bool ShowBackToDefaultPool => SelectedPool is not null && !SelectedPool.IsDefault;
+
+    // ── 首页用「当前池」的视角 ───────────────────────────────
+    //
+    // 为什么要这一层：
+    //
+    // 以前的首页直接绑主编（_gateway）的 BaseUrl / ApiKey，而那个实例
+    // 固定是默认池的。于是切到别的池时，首页还显示默认池的地址和 key ——
+    // 用户拿着这个 key 给别人，实际给错池了。
+    //
+    // 现在首页改绑下面这几个属性：它们会看「当前选中的是哪个池」——
+    //   默认池   → 还是主编那个实例（行为跟以前一模一样）
+    //   其他池   → 那个池自己的状态 / 端口 / key
+    //
+    // 注意两个池可以**同时运行**，所以这里只管「当前看的那个」，
+    // 其他的用 OtherRunningPoolsText 在下面提一句。
+
+    /// <summary>当前池的网关是否在运行。</summary>
+    public bool CurrentPoolRunning => SelectedPool is null
+        ? IsGatewayRunning
+        : SelectedPool.IsRunning;
+
+    /// <summary>当前池的网关状态文字。</summary>
+    public string CurrentGatewayStateText => SelectedPool is null
+        ? GatewayStateText
+        : SelectedPool.StatusText;
+
+    /// <summary>当前池的状态点颜色。</summary>
+    public Brush CurrentGatewayStateBrush => SelectedPool is null
+        ? GatewayStateBrush
+        : BrushFor(SelectedPool.StatusColor);
+
+    /// <summary>当前池的接入地址。</summary>
+    public string CurrentBaseUrl => SelectedPool is null
+        ? BaseUrl
+        : $"http://127.0.0.1:{SelectedPool.Port}/v1";
+
+    /// <summary>当前池的 API Key。</summary>
+    public string CurrentApiKey => SelectedPool is null ? ApiKey : SelectedPool.ApiKey;
+
+    /// <summary>
+    /// 除了当前池，还有哪些在跑的。
+    ///
+    /// 两个池可以同时跑 —— 所以切到志强池时，默认池那个网关可能还在
+    /// 给 pi 或别的客户端供着。不提醒一句的话，用户会以为它停了，
+    /// 或者反过来：以为改了志强池的 key，默认池也变了。
+    /// </summary>
+    public string OtherRunningPoolsText
+    {
+        get
+        {
+            var others = Pools
+                .Where(p => p.IsRunning && !ReferenceEquals(p, SelectedPool))
+                .ToList();
+            if (others.Count == 0) return "";
+
+            var names = string.Join("、", others.Select(p => $"{p.DisplayName}（:{p.Port}）"));
+
+            // 在默认池视角下，那个「其他」就是默认池自己 ——
+            // 说法要换一下：用户此刻看的就是默认池，说「另外还在运行」会转不过弯。
+            return SelectedPool is null
+                ? $"另外还有在跑的池：{names}"
+                : $"你正看着「{SelectedPool.DisplayName}」，另外在跑的：{names}";
+        }
+    }
+
+    public bool HasOtherRunningPools => OtherRunningPoolsText.Length > 0;
+
+    /// <summary>当前看的是哪个池 —— 给首页那段小字用。</summary>
+    public string HomePoolLabel =>
+        SelectedPool is null ? "默认池" : $"「{SelectedPool.DisplayName}」";
+
+    /// <summary>非默认池时首页提示一句「你正在看别的池」。</summary>
+    public bool HomeShowingNonDefaultPool => SelectedPool is not null && !SelectedPool.IsDefault;
+
+    /// <summary>把当前池相关的属性全部通知一遍。</summary>
+    internal void RaiseCurrentPoolProperties()
+    {
+        Raise(nameof(CurrentPoolRunning));
+        Raise(nameof(CurrentGatewayStateText));
+        Raise(nameof(CurrentGatewayStateBrush));
+        Raise(nameof(CurrentBaseUrl));
+        Raise(nameof(CurrentApiKey));
+        Raise(nameof(OtherRunningPoolsText));
+        Raise(nameof(HasOtherRunningPools));
+        Raise(nameof(HomePoolLabel));
+        Raise(nameof(HomeShowingNonDefaultPool));
+        Raise(nameof(ToggleCurrentGatewayText));
+    }
+
+    /// <summary>首页那个「复制 Base URL」按钮 —— 复制当前池的。</summary>
+    public RelayCommand CopyCurrentBaseUrlCommand { get; private set; } = null!;
+
+    /// <summary>首页那个「复制 API Key」按钮 —— 复制当前池的。</summary>
+    public RelayCommand CopyCurrentApiKeyCommand { get; private set; } = null!;
+
+    /// <summary>
+    /// 在当前池上启动/停止网关。
+    ///
+    /// 首页那个按钮用它 —— 看的是哪个池就在哪个池上操作。
+    /// 默认池仍然是走主编那条路（行为不变）。
+    /// </summary>
+    public async Task ToggleCurrentGatewayAsync()
+    {
+        if (SelectedPool is null)
+        {
+            // 默认池：委托给原来的命令，行为跟以前一模一样
+            if (IsGatewayRunning) StopGatewayCommand.Execute(null);
+            else await StartGatewayCommand.ExecuteAsync();
+            return;
+        }
+
+        if (SelectedPool.IsRunning)
+        {
+            PoolManagerRef.Stop(SelectedPool.Config);
+            FlashStatus($"「{SelectedPool.DisplayName}」已停止");
+        }
+        else
+        {
+            var node = ResolvedNodePath;
+            var api = ResolvedApiDirectory;
+            if (node is null || api is null)
+                throw new InvalidOperationException("还没找到运行环境或服务程序，先去「设置」里探测一下。");
+
+            await PoolManagerRef.StartAsync(
+                SelectedPool.Config, node, api, Provider, AuthFileOrNull);
+            FlashStatus($"「{SelectedPool.DisplayName}」已启动");
+        }
+
+        RefreshPools();
+        RaiseCurrentPoolProperties();
+    }
+
+    /// <summary>
+    /// 首页那个「启动/停止」按钮。
+    ///
+    /// 按钮文字和可用性都跟着当前池走，所以那两个也要变。
+    /// </summary>
+    public AsyncRelayCommand ToggleCurrentGatewayCommand { get; private set; } = null!;
+
+    public string ToggleCurrentGatewayText =>
+        CurrentPoolRunning ? "停止网关" : "启动网关";
+
+    public bool CanToggleCurrentGateway => SelectedPool is null
+        ? true
+        : !SelectedPool.IsExternal;
 
     internal string? AuthFileOrNull => string.IsNullOrWhiteSpace(AuthFile) ? null : AuthFile;
 
@@ -405,6 +551,19 @@ public sealed partial class MainViewModel
         CreatePoolCommand = new RelayCommand(CreatePool);
         RefreshPoolsCommand = new RelayCommand(RefreshPools);
         BackToDefaultPoolCommand = new RelayCommand(BackToDefaultPool);
+
+        // 首页那两个复制按钮 —— 复制「当前看的那个池」的地址和 key。
+        //
+        // 不能沿用 CopyBaseUrlCommand / CopyApiKeyCommand：那两个读的是
+        // 主编（默认池）的字段，切到别的池时复制的还是默认池的东西。
+        CopyCurrentBaseUrlCommand = new RelayCommand(
+            () => CopyTextToClipboard(CurrentBaseUrl, "Base URL 已复制"));
+        CopyCurrentApiKeyCommand = new RelayCommand(
+            () => CopyTextToClipboard(CurrentApiKey, "API Key 已复制"));
+
+        ToggleCurrentGatewayCommand = new AsyncRelayCommand(
+            ToggleCurrentGatewayAsync, () => CanToggleCurrentGateway, ReportError);
+
         RefreshPools();
     }
 
@@ -458,6 +617,11 @@ public sealed partial class MainViewModel
             Raise(nameof(CurrentPoolLabel));
             Raise(nameof(HasSelectedPool));
             Raise(nameof(ShowBackToDefaultPool));
+
+            // 首页那些「当前池视角」的属性也要通知 ——
+            // 池的启停会改 CurrentGatewayStateText / OtherRunningPoolsText。
+            RaiseCurrentPoolProperties();
+            ToggleCurrentGatewayCommand.RaiseCanExecuteChanged();
         });
     }
 
@@ -468,6 +632,12 @@ public sealed partial class MainViewModel
         Raise(nameof(CurrentPoolLabel));
         Raise(nameof(HasSelectedPool));
         Raise(nameof(ShowBackToDefaultPool));
+
+        // 切池之后首页显示的地址/key 也要跟着变 ——
+        // 否则用户会拿着默认池的 key 去配志强池的客户端。
+        RaiseCurrentPoolProperties();
+        ToggleCurrentGatewayCommand.RaiseCanExecuteChanged();
+
         FlashStatus($"正在显示「{pool.DisplayName}」的账号");
 
         // 先切页，再刷新。
@@ -537,6 +707,8 @@ public sealed partial class MainViewModel
         Raise(nameof(CurrentPoolLabel));
         Raise(nameof(HasSelectedPool));
         Raise(nameof(ShowBackToDefaultPool));
+        RaiseCurrentPoolProperties();
+        ToggleCurrentGatewayCommand.RaiseCanExecuteChanged();
         _ = RefreshAfterPoolSwitchAsync("默认池");
         FlashStatus("已回到默认池");
     }
