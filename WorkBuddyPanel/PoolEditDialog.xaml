@@ -5,7 +5,7 @@
         Width="470" SizeToContent="Height"
         ResizeMode="CanResize"
         WindowStartupLocation="CenterOwner"
-        Background="{StaticResource WindowBg}"
+        Background="{StaticResource Bg}"
         FontFamily="Microsoft YaHei UI, Segoe UI"
         FontSize="13">
 

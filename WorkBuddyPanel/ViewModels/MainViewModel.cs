@@ -1233,7 +1233,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// 所有 CLI 调用都走这里，为的是统一把相对路径（.\runtime\...）展开成绝对路径 ——
     /// 漏掉任何一处，发布版默认路径就会在那边悄悄失效。
     /// </summary>
-    private Task<CliResult> RunCliAsync(string arguments, string? stdin = null, CancellationToken ct = default)
+    internal Task<CliResult> RunCliAsync(string arguments, string? stdin = null, CancellationToken ct = default)
         => CliRunner.RunAsync(
             ResolvedNodePath ?? NodePath,
             ResolvedApiDirectory ?? ApiDirectory,

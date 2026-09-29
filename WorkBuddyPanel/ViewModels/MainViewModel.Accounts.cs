@@ -912,8 +912,7 @@ public sealed partial class MainViewModel
         //   1. 它是 --maintain 拉起来的，屏幕上可能根本没开界面
         //   2. 即使用户开着界面，他此刻可能正看着某个朋友的池，
         //      于是默认池的号就永远不续期了
-        var result = await CliRunner.RunAsync(
-            NodePath, ApiDirectory, $"src/bin.js checkin --json{ProviderArgs()}");
+        var result = await RunCliAsync($"src/bin.js checkin --json{ProviderArgs()}");
         var json = CliRunner.ExtractJson(result.StdOut);
         if (json is null)
         {

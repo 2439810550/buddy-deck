@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
@@ -226,8 +227,18 @@ public sealed class PoolRowVm : ObservableObject
 
         try
         {
+            var wasDefault = _config.IsDefault;
             _owner.PoolManagerRef.Update(_config, dialog.PoolName, dialog.PoolNote, dialog.PoolPort);
+
+            // 默认池的端口写在两个地方：pools.json（分池页显示）和
+            // settings.json（真正启动网关用的）。不同步的话分池页显示 8788、
+            // 而网关还在 8787 —— 两边各说各话。实测踩过。
+            if (wasDefault && dialog.PortChanged)
+                _owner.SyncDefaultPoolPort(_config.Port);
+
             Refresh();
+            _owner.RefreshPools();
+
             if (dialog.PortChanged)
                 _owner.FlashStatus("端口改了，这个池如果正在跑需要重启才生效");
             else
@@ -361,7 +372,21 @@ public sealed partial class MainViewModel
         string command, string? stdin = null, CancellationToken ct = default)
     {
         var home = SelectedPool is { IsDefault: false } pool ? pool.Config.VaultHome() : null;
-        return CliRunner.RunAsync(NodePath, ApiDirectory, command, stdin, ct, home);
+
+        // 用**解析后**的绝对路径，不是 NodePath / ApiDirectory 原始值。
+        //
+        // 两者在「用户填的是相对路径」时会分岔：
+        //   NodePath        可能是 ".\runtime\node.exe"（发布版的默认写法）
+        //   ResolvedNodePath 是 "<exe目录>\runtime\node.exe"
+        //
+        // CliRunner 会把工作目录切成 ApiDirectory，于是那个相对路径就成了
+        //   <ApiDirectory>\runtime\node.exe
+        // ——多套一层，必然找不到。实测就是这么挂的：
+        // 用户点了「恢复默认设置」，之后所有账号操作全部报
+        //   "An error occurred trying to start process '.\runtime\node.exe'"。
+        var node = ResolvedNodePath ?? NodePath;
+        var api = ResolvedApiDirectory ?? ApiDirectory;
+        return CliRunner.RunAsync(node, api, command, stdin, ct, home);
     }
 
     /// <summary>没有任何池时显示提示（理论上不会：默认池恒在）。</summary>
@@ -512,6 +537,26 @@ public sealed partial class MainViewModel
         {
             AppendLog($"[分池] 登记默认池失败：{ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// 把默认池的端口写回主页的设置（settings.json）。
+    ///
+    /// 为什么需要：默认池的端口**存在两个地方** ——
+    ///   pools.json    分池页上显示的那个数字
+    ///   settings.json 真正启动网关时用的那个数字
+    ///
+    /// 在分池页改了默认池端口，如果只写 pools.json，就会出现
+    /// 「分池页写着 8788、网关实际在 8787」——实测踩过。
+    /// 这里保证两边一致。
+    /// </summary>
+    internal void SyncDefaultPoolPort(int port)
+    {
+        var text = port.ToString(CultureInfo.InvariantCulture);
+        if (Port == text) return;
+        Port = text;
+        SaveSettings();
+        AppendLog($"[分池] 默认池端口同步为 {port}");
     }
 
     /// <summary>默认池的实例起来了 —— 同步主页那份状态。</summary>

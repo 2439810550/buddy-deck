@@ -391,8 +391,7 @@ public sealed partial class MainViewModel
         BusyText = "正在写入 CC Switch…";
         try
         {
-            var result = await CliRunner.RunAsync(
-                NodePath, ApiDirectory, $"src/bin.js ccswitch --json{ProviderArgs()}");
+            var result = await RunCliAsync($"src/bin.js ccswitch --json{ProviderArgs()}");
             var json = CliRunner.ExtractJson(result.StdOut);
 
             if (json is null)
@@ -443,8 +442,7 @@ public sealed partial class MainViewModel
 
         try
         {
-            var result = await CliRunner.RunAsync(
-                NodePath, ApiDirectory, $"src/bin.js ccswitch --status --json{ProviderArgs()}");
+            var result = await RunCliAsync($"src/bin.js ccswitch --status --json{ProviderArgs()}");
             var json = CliRunner.ExtractJson(result.StdOut);
             if (json is null) return;
 
@@ -473,8 +471,7 @@ public sealed partial class MainViewModel
         BusyText = "正在写回客户端配置…";
         try
         {
-            var result = await CliRunner.RunAsync(
-                NodePath, ApiDirectory, $"src/bin.js ccswitch --apply --json{ProviderArgs()}");
+            var result = await RunCliAsync($"src/bin.js ccswitch --apply --json{ProviderArgs()}");
             var json = CliRunner.ExtractJson(result.StdOut);
 
             if (json is null)
