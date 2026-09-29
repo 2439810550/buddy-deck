@@ -137,6 +137,26 @@ if (-not $SkipUi) {
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Start-Sleep 3
 
+        # 备份真实配置。
+        #
+        # 界面测试会真的点按钮 —— 其中「换一个空闲的端口」之类的按钮
+        # 会直接写 %APPDATA%\WorkBuddyPanel\settings.json。
+        # 不备一份的话，跑完测试用户的端口/路径就被改掉了。
+        # 实测踩过：用户的端口从 8787 变成 8789。
+        $cfgDir = Join-Path $env:APPDATA "WorkBuddyPanel"
+        $backups = @{}
+        foreach ($f in @("settings.json", "pools.json")) {
+            $src = Join-Path $cfgDir $f
+            if (Test-Path $src) {
+                $bak = "$src.uitest-backup"
+                Copy-Item $src $bak -Force
+                $backups[$src] = $bak
+            }
+        }
+        if ($backups.Count -gt 0) {
+            Write-Host "  备份了 $($backups.Count) 个配置文件（测完恢复）" -ForegroundColor DarkGray
+        }
+
         Start-Process $exe
         Write-Host "  等程序起来（$StartupWait 秒）…" -ForegroundColor DarkGray
         Start-Sleep $StartupWait
@@ -152,6 +172,20 @@ if (-not $SkipUi) {
             Add-Result "界面点击测试" ($uiCode -eq 0)
 
             Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+            Start-Sleep 2
+
+            # 恢复配置 —— 测试点过的按钮可能改了它
+            foreach ($pair in $backups.GetEnumerator()) {
+                try {
+                    Copy-Item $pair.Value $pair.Key -Force
+                    Remove-Item $pair.Value -Force -ErrorAction SilentlyContinue
+                } catch {
+                    Write-Host "  恢复 $($pair.Key) 失败：$($_.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
+            if ($backups.Count -gt 0) {
+                Write-Host "  已恢复配置文件" -ForegroundColor DarkGray
+            }
         } else {
             Write-Host "  程序没起来" -ForegroundColor Red
             Add-Result "界面点击测试" $false

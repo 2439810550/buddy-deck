@@ -217,9 +217,12 @@ public sealed class PoolManager : IDisposable
     public PoolConfig Create(string name, string? note, int? port = null)
     {
         var display = string.IsNullOrWhiteSpace(name) ? "新池" : name.Trim();
-        var chosenPort = port is > 0 and <= 65535 && !PoolStore.IsPortInUse(port.Value)
-            ? port.Value
-            : PoolStore.FindFreePort();
+
+        // 注意：把 Pools 一起传进去。
+        // 只看「现在有没有人监听」是不够的 —— 已经分配给别的池、但那个池
+        // 现在没在跑的端口，也是占用的。实测就是这么撞的：
+        // 默认池和新建的池都被分到了 8789。
+        var chosenPort = PoolStore.PickPort(Pools, port);
 
         var dir = PoolStore.UniqueDirectoryName(
             PoolStore.MakeDirectoryName(display, chosenPort), Pools);

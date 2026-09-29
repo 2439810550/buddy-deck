@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -328,6 +329,50 @@ public static class PoolStore
         var tmp = FilePath + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(doc, Options));
         File.Move(tmp, FilePath, overwrite: true);
+    }
+
+    /// <summary>
+    /// 给新池挑一个端口。
+    ///
+    /// ── 为什么不能只看「现在有没有人监听」──────────────────────
+    ///
+    /// 端口被占用有两种情况：
+    ///   ① 此刻真的有进程在听 —— IsPortInUse 能查到
+    ///   ② **已经被别的池分配了，但那个池现在没在跑** —— 查不到
+    ///
+    /// 只看 ① 的话，实测出现过这种结果：
+    ///
+    ///     pools.json:  默认池 = 8789，朋友的池 = 8789
+    ///
+    /// 两个池显示同一个端口，启第二个必然失败。
+    ///
+    /// 所以这个函数把「已分配给别的池的端口」也算作占用。
+    ///
+    /// @param existing 现有的池（它们的 Port 都算占用）
+    /// @param preferred 用户指定的端口；为 null 或已被占用则自动挑
+    /// </summary>
+    public static int PickPort(IEnumerable<PoolConfig> existing, int? preferred = null)
+    {
+        var taken = existing.Select(p => p.Port)
+            .Where(p => p is > 0 and <= 65535)
+            .ToHashSet();
+
+        // 用户明确指定的端口：只要没被别的池占、也没人监听，就用它
+        if (preferred is > 0 and <= 65535
+            && !taken.Contains(preferred.Value)
+            && !IsPortInUse(preferred.Value))
+        {
+            return preferred.Value;
+        }
+
+        // 自动挑：从 8788 起，逐个排除
+        for (var port = 8788; port < 65535; port++)
+        {
+            if (!taken.Contains(port) && !IsPortInUse(port)) return port;
+        }
+
+        // 理论上到不了 —— 端口空间不可能全占满
+        return preferred is > 0 ? preferred.Value : 8788;
     }
 
     /// <summary>

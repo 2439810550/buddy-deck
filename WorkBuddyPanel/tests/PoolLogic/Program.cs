@@ -211,6 +211,47 @@ Check("正常池名可用",
 Check("正常池名指向 pools 里面",
       goodFull.Contains("pools"), goodFull);
 
+
+// ══════════════════════════════════════════════════════════════
+//  ⑨ 端口分配不能和已有池撞（实测踩到的 bug）
+// ══════════════════════════════════════════════════════════════
+
+// 场景：pools.json 里默认池已经占了 8789，但网关此刻没在跑
+//       → 「现在有没有人监听」查到 8789 是空闲的
+//       → 新建池又选了 8789
+//
+// 对用户而言：两个池显示同一个端口，启动第二个必然失败。
+
+var existing = new List<PoolConfig>
+{
+    new() { Name = "默认池", DirectoryName = "", Port = 8789 },
+    new() { Name = "已有的池", DirectoryName = "p-aaa", Port = 8790 },
+};
+
+// 直接测产品代码里的 PickPort —— 不是我自己重写一遍逻辑。
+var picked = PoolStore.PickPort(existing);
+
+Check($"新池端口避开已分配的（8789/8790 已占 → 选 {picked}）",
+      picked != 8789 && picked != 8790, $"实际 {picked}");
+
+// 用户明确指定端口，且没被占用 → 尊重它
+var picked2 = PoolStore.PickPort(existing, 8899);
+Check($"指定的空闲端口被尊重（8899）", picked2 == 8899, $"实际 {picked2}");
+
+// 用户指定了已被别的池占用的端口 → 换一个
+var picked3 = PoolStore.PickPort(existing, 8789);
+Check($"指定的已占端口被换掉（8789 → {picked3}）",
+      picked3 != 8789, $"实际 {picked3}");
+
+// 空列表（刚装好，只有默认池的情况）
+var picked4 = PoolStore.PickPort(new List<PoolConfig>());
+Check($"没有任何池时从 8788 起（{picked4}）", picked4 >= 8788, $"实际 {picked4}");
+
+// 默认池的端口也要避开
+var withDefault = new List<PoolConfig> { new() { Name = "默认池", Port = 8787 } };
+var picked5 = PoolStore.PickPort(withDefault);
+Check($"避开默认池的 8787（{picked5}）", picked5 != 8787, $"实际 {picked5}");
+
 Console.WriteLine();
 Console.WriteLine(new string('═', 62));
 Console.WriteLine($"  通过 {ok} 项，失败 {bad} 项");
