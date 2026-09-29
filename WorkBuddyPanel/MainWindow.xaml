@@ -548,6 +548,32 @@
                                     <Button Content="↻" Style="{StaticResource IconButton}" Margin="10,0,0,0"
                                             Command="{Binding RefreshAccountsCommand}"
                                             ToolTip="刷新全部账号的积分和签到状态" />
+
+                                    <!--
+                                        当前看的是哪个池的账号。
+                                    
+                                        没选池时不显示（那就是默认池）—— 只用默认池的用户
+                                        看不到任何「池」的字样，和分池功能之前完全一样。
+                                        选了别的池才出现这个标签，同时给一个回去的口子。
+                                    -->
+                                    <Border Background="#EAF3FF" CornerRadius="4" Padding="8,2"
+                                            Margin="12,0,0,0" VerticalAlignment="Center"
+                                            Visibility="{Binding HasSelectedPool, Converter={StaticResource BoolToVis}}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="正在看：" FontSize="12"
+                                                       Foreground="#1E6FD9" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding CurrentPoolLabel}" FontSize="12"
+                                                       FontWeight="SemiBold" Foreground="#1E6FD9"
+                                                       VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Border>
+                                    
+                                    <Button Content="回到默认池" FontSize="12" Padding="8,3"
+                                            Margin="8,0,0,0" VerticalAlignment="Center"
+                                            Command="{Binding BackToDefaultPoolCommand}"
+                                            BorderBrush="{StaticResource Line}" BorderThickness="1"
+                                            Background="White"
+                                            Visibility="{Binding ShowBackToDefaultPool, Converter={StaticResource BoolToVis}}" />
                                 </StackPanel>
 
 <!--
@@ -926,6 +952,293 @@
                                                 </Expander>
                                             </Grid>
                                         </TabItem>
+                                        <!-- ══════════════ 分池 ══════════════ -->
+                                        <TabItem Header="  分池  " VerticalContentAlignment="Stretch">
+                                            <!--
+                                                三行布局（和账号页同一个套路）：
+                                        
+                                                  行 0  说明卡片      —— 按内容高
+                                                  行 1  工具条        —— 按内容高
+                                                  行 2  池列表        —— ★ 必须 *
+                                        
+                                                `*` 那行给列表**有限高度**，它才会自己滚动。
+                                                写成 Auto 的话列表会一路撑长，一屏看不到底。
+                                            -->
+                                            <Grid Margin="4,10,4,10">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="*" />
+                                                </Grid.RowDefinitions>
+                                        
+                                                <!-- 行 0：说明 -->
+                                                <Border Grid.Row="0" Style="{StaticResource CardStyle}" Margin="0,0,0,10">
+                                                    <StackPanel>
+                                                        <TextBlock Text="分池是怎么回事" Style="{StaticResource H1}" />
+                                                        <TextBlock Style="{StaticResource Sub}" Margin="0,0,0,8" TextWrapping="Wrap">
+                                                            一个池 = 一套账号 + 一个独立的接入地址。
+                                                        </TextBlock>
+                                                        <TextBlock Style="{StaticResource Sub}" TextWrapping="Wrap">
+                                                            为什么要这么分：网关同一时刻只能用**一个账号**（保险库里只有一个「当前使用」）。所以想让自己和朋友的号各跑各的、互不打扰，就得给每组号单独起一个网关 —— 各自占一个端口，各有一份账号，用量也各算各的。
+                                                        </TextBlock>
+                                                        <Border Background="#F6F8FA" CornerRadius="6" Padding="10,8" Margin="0,10,0,0">
+                                                            <StackPanel>
+                                                                <TextBlock Style="{StaticResource Sub}" TextWrapping="Wrap">
+                                                                    <Run FontWeight="SemiBold">怎么用：</Run>点「新建池」起一个 → 在「账号」页切换到这个池，把号加进去 → 把上面那行「接入地址」和 API Key 给对方。对方所有请求都只走他自己的号。
+                                                                </TextBlock>
+                                                                <TextBlock Style="{StaticResource Sub}" TextWrapping="Wrap" Margin="0,6,0,0">
+                                                                    <Run FontWeight="SemiBold">三种地址的区别：</Run>127.0.0.1 只有本机能连；192.168 开头是同一个 WiFi 下的人能连；100.x 开头是装了 Tailscale 的人能连（不在同一个网络时用这个）。
+                                                                </TextBlock>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </StackPanel>
+                                                </Border>
+                                        
+                                                <!-- 行 1：工具条 -->
+                                                <Border Grid.Row="1" Background="#FBFCFD" BorderBrush="{StaticResource Line}"
+                                                        BorderThickness="1" CornerRadius="8" Padding="12,9" Margin="0,0,0,10">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                        
+                                                        <Button Grid.Column="0" Content="＋ 新建池"
+                                                                Style="{StaticResource PrimaryButton}" MinWidth="104"
+                                                                Command="{Binding CreatePoolCommand}"
+                                                                ToolTip="起一套新的账号 + 接入地址" />
+                                        
+                                                        <TextBlock Grid.Column="1" Text="{Binding PoolsSummary}"
+                                                                   VerticalAlignment="Center" Margin="14,0,0,0"
+                                                                   Foreground="{StaticResource TextSub}" FontSize="12.5"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                        
+                                                        <Button Grid.Column="2" Content="刷新"
+                                                                Style="{StaticResource GhostButton}" MinWidth="68"
+                                                                Command="{Binding RefreshPoolsCommand}" />
+                                                    </Grid>
+                                                </Border>
+                                        
+                                                <!-- 行 2：池列表 -->
+                                                <Border Grid.Row="2" Style="{StaticResource CardStyle}">
+                                                    <Grid>
+                                                        <Grid.RowDefinitions>
+                                                            <RowDefinition Height="Auto" />
+                                                            <RowDefinition Height="*" />
+                                                        </Grid.RowDefinitions>
+                                        
+                                                        <TextBlock Grid.Row="0" Text="池列表" Style="{StaticResource H1}"
+                                                                   Margin="2,0,0,10" />
+                                        
+                                                        <!-- 没有任何池（理论上不会发生：默认池恒在） -->
+                                                        <TextBlock Grid.Row="1" Style="{StaticResource Sub}"
+                                                                   Text="还没有池。点上面的「新建池」开始。"
+                                                                   Visibility="{Binding HasNoPools, Converter={StaticResource BoolToVis}}" />
+                                        
+                                                        <ListBox Grid.Row="1"
+                                                                 ItemsSource="{Binding Pools}"
+                                                                 BorderThickness="0" Background="Transparent"
+                                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                                 VirtualizingPanel.IsVirtualizing="True"
+                                                                 VirtualizingPanel.VirtualizationMode="Recycling">
+                                                            <ListBox.ItemContainerStyle>
+                                                                <Style TargetType="ListBoxItem">
+                                                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                                                    <Setter Property="Padding" Value="0" />
+                                                                    <Setter Property="Margin" Value="0,0,0,10" />
+                                                                    <Setter Property="Background" Value="Transparent" />
+                                                                    <Setter Property="Template">
+                                                                        <Setter.Value>
+                                                                            <ControlTemplate TargetType="ListBoxItem">
+                                                                                <ContentPresenter />
+                                                                            </ControlTemplate>
+                                                                        </Setter.Value>
+                                                                    </Setter>
+                                                                </Style>
+                                                            </ListBox.ItemContainerStyle>
+                                        
+                                                            <ListBox.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <Border BorderBrush="{StaticResource Line}" BorderThickness="1"
+                                                                            CornerRadius="8" Padding="14,12" Background="White">
+                                                                        <Grid>
+                                                                            <Grid.ColumnDefinitions>
+                                                                                <ColumnDefinition Width="*" />
+                                                                                <ColumnDefinition Width="Auto" />
+                                                                            </Grid.ColumnDefinitions>
+                                        
+                                                                            <!-- 左：池信息 -->
+                                                                            <StackPanel Grid.Column="0">
+                                                                                <!-- 名字 + 状态 -->
+                                                                                <StackPanel Orientation="Horizontal">
+                                                                                    <TextBlock Text="{Binding StatusDot}"
+                                                                                               Foreground="{Binding StatusColor}"
+                                                                                               FontSize="14" VerticalAlignment="Center" />
+                                                                                    <TextBlock Text="{Binding DisplayName}"
+                                                                                               FontSize="14.5" FontWeight="SemiBold"
+                                                                                               Foreground="{StaticResource TextMain}"
+                                                                                               Margin="6,0,0,0" VerticalAlignment="Center" />
+                                                                                    <Border Background="#EEF2F7" CornerRadius="4"
+                                                                                            Padding="6,2" Margin="8,0,0,0"
+                                                                                            VerticalAlignment="Center">
+                                                                                        <TextBlock Text="{Binding StatusText}"
+                                                                                                   FontSize="11.5"
+                                                                                                   Foreground="{Binding StatusColor}" />
+                                                                                    </Border>
+                                                                                    <Border Background="#EAF3FF" CornerRadius="4"
+                                                                                            Padding="6,2" Margin="6,0,0,0"
+                                                                                            VerticalAlignment="Center"
+                                                                                            Visibility="{Binding IsDefault, Converter={StaticResource BoolToVis}}">
+                                                                                        <TextBlock Text="自带" FontSize="11.5"
+                                                                                                   Foreground="#1E6FD9" />
+                                                                                    </Border>
+                                                                                </StackPanel>
+                                        
+                                                                                <!-- 备注 -->
+                                                                                <TextBlock Text="{Binding NoteText}" FontSize="12.5"
+                                                                                           Foreground="{StaticResource TextSub}"
+                                                                                           Margin="0,5,0,0" TextWrapping="Wrap"
+                                                                                           Visibility="{Binding HasNote, Converter={StaticResource BoolToVis}}" />
+                                        
+                                                                                <!-- 端口 / 账号数 -->
+                                                                                <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
+                                                                                    <TextBlock Text="端口" FontSize="12.5"
+                                                                                               Foreground="{StaticResource TextSub}" />
+                                                                                    <TextBlock Text="{Binding Port}" FontSize="12.5"
+                                                                                               FontWeight="SemiBold" Margin="5,0,0,0"
+                                                                                               Foreground="{StaticResource TextMain}" />
+                                                                                    <TextBlock Text="·" FontSize="12.5" Margin="8,0"
+                                                                                               Foreground="{StaticResource TextSub}" />
+                                                                                    <TextBlock Text="{Binding AccountCountText}" FontSize="12.5"
+                                                                                               Foreground="{StaticResource TextSub}" />
+                                                                                </StackPanel>
+                                        
+                                                                                <!-- 接入地址 -->
+                                                                                <Border Background="#F6F8FA" CornerRadius="6"
+                                                                                        Padding="10,8" Margin="0,10,0,0">
+                                                                                    <StackPanel>
+                                                                                        <StackPanel Orientation="Horizontal">
+                                                                                            <TextBlock Text="本机" FontSize="12"
+                                                                                                       Foreground="{StaticResource TextSub}"
+                                                                                                       Width="66" VerticalAlignment="Center" />
+                                                                                            <TextBlock Text="{Binding UrlLocal}" FontSize="12.5"
+                                                                                                       FontFamily="Consolas, Microsoft YaHei UI"
+                                                                                                       Foreground="{StaticResource TextMain}"
+                                                                                                       VerticalAlignment="Center"
+                                                                                                       TextTrimming="CharacterEllipsis" />
+                                                                                            <Button Content="复制" FontSize="11.5"
+                                                                                                    Padding="8,2" Margin="8,0,0,0"
+                                                                                                    Command="{Binding CopyUrlCommand}"
+                                                                                                    BorderBrush="{StaticResource Line}"
+                                                                                                    BorderThickness="1" Background="White" />
+                                                                                        </StackPanel>
+                                        
+                                                                                        <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                                                                                            <TextBlock Text="局域网" FontSize="12"
+                                                                                                       Foreground="{StaticResource TextSub}"
+                                                                                                       Width="66" VerticalAlignment="Center" />
+                                                                                            <TextBlock Text="{Binding UrlLan}" FontSize="12.5"
+                                                                                                       FontFamily="Consolas, Microsoft YaHei UI"
+                                                                                                       Foreground="{StaticResource TextMain}"
+                                                                                                       VerticalAlignment="Center"
+                                                                                                       TextTrimming="CharacterEllipsis" />
+                                                                                            <Button Content="复制" FontSize="11.5"
+                                                                                                    Padding="8,2" Margin="8,0,0,0"
+                                                                                                    Command="{Binding CopyLanUrlCommand}"
+                                                                                                    BorderBrush="{StaticResource Line}"
+                                                                                                    BorderThickness="1" Background="White" />
+                                                                                        </StackPanel>
+                                        
+                                                                                        <StackPanel Orientation="Horizontal" Margin="0,5,0,0"
+                                                                                                    Visibility="{Binding HasTailscale, Converter={StaticResource BoolToVis}}">
+                                                                                            <TextBlock Text="外网" FontSize="12"
+                                                                                                       Foreground="{StaticResource TextSub}"
+                                                                                                       Width="66" VerticalAlignment="Center" />
+                                                                                            <TextBlock Text="{Binding UrlTailscale}" FontSize="12.5"
+                                                                                                       FontFamily="Consolas, Microsoft YaHei UI"
+                                                                                                       Foreground="{StaticResource TextMain}"
+                                                                                                       VerticalAlignment="Center"
+                                                                                                       TextTrimming="CharacterEllipsis" />
+                                                                                            <Button Content="复制" FontSize="11.5"
+                                                                                                    Padding="8,2" Margin="8,0,0,0"
+                                                                                                    Command="{Binding CopyUrlCommand}"
+                                                                                                    BorderBrush="{StaticResource Line}"
+                                                                                                    BorderThickness="1" Background="White" />
+                                                                                        </StackPanel>
+                                        
+                                                                                        <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                                                                                            <TextBlock Text="API Key" FontSize="12"
+                                                                                                       Foreground="{StaticResource TextSub}"
+                                                                                                       Width="66" VerticalAlignment="Center" />
+                                                                                            <TextBlock Text="{Binding ApiKey}" FontSize="12.5"
+                                                                                                       FontFamily="Consolas, Microsoft YaHei UI"
+                                                                                                       Foreground="{StaticResource TextMain}"
+                                                                                                       VerticalAlignment="Center"
+                                                                                                       TextTrimming="CharacterEllipsis" />
+                                                                                            <Button Content="复制" FontSize="11.5"
+                                                                                                    Padding="8,2" Margin="8,0,0,0"
+                                                                                                    Command="{Binding CopyKeyCommand}"
+                                                                                                    BorderBrush="{StaticResource Line}"
+                                                                                                    BorderThickness="1" Background="White" />
+                                                                                        </StackPanel>
+                                                                                    </StackPanel>
+                                                                                </Border>
+                                        
+                                                                                <!-- 启动失败的原因 -->
+                                                                                <Border Background="#FFF4F4" BorderBrush="#F0C2C2"
+                                                                                        BorderThickness="1" CornerRadius="6"
+                                                                                        Padding="10,7" Margin="0,8,0,0"
+                                                                                        Visibility="{Binding HasError, Converter={StaticResource BoolToVis}}">
+                                                                                    <TextBlock Text="{Binding ErrorText}" FontSize="12"
+                                                                                               Foreground="#B03030" TextWrapping="Wrap" />
+                                                                                </Border>
+                                                                            </StackPanel>
+                                        
+                                                                            <!-- 右：操作 -->
+                                                                            <StackPanel Grid.Column="1" VerticalAlignment="Top" Margin="14,0,0,0">
+                                                                                <Button Content="管理账号" MinWidth="102"
+                                                                                        Style="{StaticResource PrimaryButton}"
+                                                                                        Command="{Binding ManageAccountsCommand}"
+                                                                                        ToolTip="在「账号」页查看和管理这个池的账号" />
+                                        
+                                                                                <Button Content="启动" MinWidth="102" Margin="0,6,0,0"
+                                                                                        Style="{StaticResource GhostButton}"
+                                                                                        Command="{Binding StartCommand}"
+                                                                                        Visibility="{Binding IsRunning, Converter={StaticResource BoolToVisInv}}" />
+                                        
+                                                                                <Button Content="停止" MinWidth="102" Margin="0,6,0,0"
+                                                                                        Style="{StaticResource GhostButton}"
+                                                                                        Command="{Binding StopCommand}"
+                                                                                        Visibility="{Binding CanStop, Converter={StaticResource BoolToVis}}" />
+                                        
+                                                                                <Button Content="改名字 / 端口" MinWidth="102" Margin="0,6,0,0"
+                                                                                        Style="{StaticResource GhostButton}"
+                                                                                        Command="{Binding EditCommand}" />
+                                        
+                                                                                <Button Content="打开目录" MinWidth="102" Margin="0,6,0,0"
+                                                                                        Style="{StaticResource GhostButton}"
+                                                                                        Command="{Binding OpenFolderCommand}"
+                                                                                        ToolTip="账号文件存在这个目录里" />
+                                        
+                                                                                <Button Content="删除这个池" MinWidth="102" Margin="0,6,0,0"
+                                                                                        Style="{StaticResource GhostButton}"
+                                                                                        Foreground="#C0392B"
+                                                                                        Command="{Binding RemoveCommand}"
+                                                                                        Visibility="{Binding CanRemove, Converter={StaticResource BoolToVis}}" />
+                                                                            </StackPanel>
+                                                                        </Grid>
+                                                                    </Border>
+                                                                </DataTemplate>
+                                                            </ListBox.ItemTemplate>
+                                                        </ListBox>
+                                                    </Grid>
+                                                </Border>
+                                            </Grid>
+                                        </TabItem>
+                                        
+
 
                                             <!-- ══════════════ 对话 ══════════════ -->
                                             <TabItem Header="  对话  ">

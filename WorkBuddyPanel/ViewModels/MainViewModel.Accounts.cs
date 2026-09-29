@@ -424,8 +424,7 @@ public sealed partial class MainViewModel
         // 不置 IsBusy：自动刷新是背景行为，不该把界面按钮都灰掉
         try
         {
-            var result = await CliRunner.RunAsync(
-                NodePath, ApiDirectory, $"src/bin.js accounts --no-checkin --json{ProviderArgs()}");
+            var result = await RunPoolCliAsync($"src/bin.js accounts --no-checkin --json{ProviderArgs()}");
             var json = CliRunner.ExtractJson(result.StdOut);
             if (json is null) return;
 
@@ -697,8 +696,7 @@ public sealed partial class MainViewModel
         {
             var ids = string.Join(" ", rows.Select(row => $"\"{row.Id}\""));
             var forceArg = force ? " --force" : "";
-            var result = await CliRunner.RunAsync(
-                NodePath, ApiDirectory, $"src/bin.js accounts renew{forceArg} {ids}{ProviderArgs()}");
+            var result = await RunPoolCliAsync($"src/bin.js accounts renew{forceArg} {ids}{ProviderArgs()}");
             AccountsResult = result.Combined;
             AppendLog("[续期] " + result.Combined.Replace("\n", " / "));
             if (result.Ok) FlashStatus("续期完成"); else SetStatus("续期失败，看「日志」标签页");
@@ -753,9 +751,7 @@ public sealed partial class MainViewModel
         try
         {
             // 口令走 stdin（写两遍，CLI 会要求确认），不经命令行参数
-            var result = await CliRunner.RunAsync(
-                NodePath,
-                ApiDirectory,
+            var result = await RunPoolCliAsync(
                 $"src/bin.js accounts export --out \"{dialog.FileName}\"{ProviderArgs()}",
                 stdin: $"{passphrase}\n{passphrase}\n");
 
@@ -808,9 +804,7 @@ public sealed partial class MainViewModel
         BusyText = "正在导入并验证…";
         try
         {
-            var result = await CliRunner.RunAsync(
-                NodePath,
-                ApiDirectory,
+            var result = await RunPoolCliAsync(
                 $"src/bin.js accounts import \"{dialog.FileName}\" --json{ProviderArgs()}",
                 stdin: $"{passphrase}\n");
 
@@ -867,9 +861,7 @@ public sealed partial class MainViewModel
         row.SetRefreshing(true);
         try
         {
-            var result = await CliRunner.RunAsync(
-                NodePath,
-                ApiDirectory,
+            var result = await RunPoolCliAsync(
                 $"src/bin.js accounts --no-checkin --id \"{row.Id}\" --json{ProviderArgs()}");
             var json = CliRunner.ExtractJson(result.StdOut);
             if (json is null)
@@ -914,6 +906,12 @@ public sealed partial class MainViewModel
             return skipped;
         }
 
+        // 这条是计划任务在后台跑的维护流程 —— **必须固定在默认池**。
+        //
+        // 不能跟着「分池页当前选中的池」走：
+        //   1. 它是 --maintain 拉起来的，屏幕上可能根本没开界面
+        //   2. 即使用户开着界面，他此刻可能正看着某个朋友的池，
+        //      于是默认池的号就永远不续期了
         var result = await CliRunner.RunAsync(
             NodePath, ApiDirectory, $"src/bin.js checkin --json{ProviderArgs()}");
         var json = CliRunner.ExtractJson(result.StdOut);
@@ -1028,7 +1026,7 @@ public sealed partial class MainViewModel
         {
             var extra = fast ? " --no-checkin" : "";
             var command = $"src/bin.js accounts --json{ProviderArgs()}{extra}";
-            var result = await CliRunner.RunAsync(NodePath, ApiDirectory, command);
+            var result = await RunPoolCliAsync(command);
 
             // 记账式日志：出问题时能直接看到命令、退出码、输出大小
             AppendLog($"[账号] {command}  退出码={result.ExitCode}  输出={result.StdOut.Length} 字节");
@@ -1172,8 +1170,8 @@ public sealed partial class MainViewModel
         {
             var ids = string.Join(" ", rows.Select(row => $"--id \"{row.Id}\""));
             var forceArg = force ? " --force" : "";
-            var result = await CliRunner.RunAsync(
-                NodePath, ApiDirectory, $"src/bin.js checkin --json{forceArg} {ids}{ProviderArgs()}");
+            var result = await RunPoolCliAsync(
+                $"src/bin.js checkin --json{forceArg} {ids}{ProviderArgs()}");
             var json = CliRunner.ExtractJson(result.StdOut);
 
             var lines = new List<string>();

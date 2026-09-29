@@ -8,8 +8,29 @@ namespace WorkBuddyPanel;
 
 public partial class App : Application
 {
-    private const string MutexName = @"Local\WorkBuddyPanel.SingleInstance.UiTest";
-    private const string ShowSignalName = @"Local\WorkBuddyPanel.ShowWindow.UiTest";
+    /// <summary>
+    /// 单实例锁的名字。
+    ///
+    /// 名字里带 exe 路径的哈希 —— 为什么：
+    ///   绝对路径不同的两个实例应当能同时跑。
+    ///   实际场景：用户在 D:\BuddyDeck 装着正式版（长期开着、网关挂在它身上），
+    ///   同时又想跑一下刚编的新版试试 —— 固定名字的锁会让后者直接把前者
+    ///   叫出来然后自己退出，根本测不了。
+    ///
+    /// 同一个 exe 双开仍然会被拦（那是原本要防的：两个实例抢同一个端口）。
+    /// </summary>
+    private static readonly string MutexName = BuildInstanceName("SingleInstance");
+
+    private static readonly string ShowSignalName = BuildInstanceName("ShowWindow");
+
+    private static string BuildInstanceName(string kind)
+    {
+        var path = Environment.ProcessPath ?? "default";
+        var hash = 0;
+        foreach (var ch in path.ToLowerInvariant())
+            hash = (hash * 31 + ch) & 0x7FFFFFFF;
+        return string.Format(@"Local\WorkBuddyPanel.{0}.{1:X}", kind, hash);
+    }
 
     private MainWindow? _window;
     private TrayIcon? _tray;

@@ -18,7 +18,8 @@ public static class CliRunner
         string workingDirectory,
         string arguments,
         string? stdin = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? vaultHome = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -34,6 +35,11 @@ public static class CliRunner
             StandardOutputEncoding = new UTF8Encoding(false),
             StandardErrorEncoding = new UTF8Encoding(false),
         };
+
+        // 指定账号池。workbuddy_api 靠这个环境变量决定读哪一份 accounts.cn.json，
+        // 所以它是「这条命令作用于哪个池」的唯一开关。
+        if (!string.IsNullOrWhiteSpace(vaultHome))
+            psi.Environment["WORKBUDDY_API_HOME"] = vaultHome;
 
         using var process = new Process { StartInfo = psi };
         var stdout = new StringBuilder();

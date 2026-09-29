@@ -223,6 +223,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         InitialiseClients();
         InitialiseAccounts();
+        InitialisePools();
 
         // 一次性提示的自动清除
         _statusTimer.Tick += (_, _) =>
@@ -510,7 +511,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// 现在这类“动作已做完”的回执 12 秒后自己消失，
     /// 真正的状态（路径来源、错误）还是用常驻的 StatusDetail。
     /// </summary>
-    private void FlashStatus(string message)
+    internal void FlashStatus(string message)
     {
         StatusDetail = message;
         Raise(nameof(StatusIsTransient));
@@ -628,10 +629,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     // 所以统一在这里展开一次，界面上仍然显示用户填的那个（相对）样子。
 
     /// <summary>实际启动进程用的 node.exe 绝对路径。</summary>
-    private string? ResolvedNodePath => ProcessLocator.MakeAbsolute(NodePath);
+    internal string? ResolvedNodePath => ProcessLocator.MakeAbsolute(NodePath);
 
     /// <summary>实际启动进程用的 workbuddy_api 绝对目录。</summary>
-    private string? ResolvedApiDirectory => ProcessLocator.MakeAbsolute(ApiDirectory);
+    internal string? ResolvedApiDirectory => ProcessLocator.MakeAbsolute(ApiDirectory);
 
     public bool CanRunNode =>
         ResolvedNodePath is { } node && File.Exists(node) &&
@@ -880,6 +881,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         await RefreshAutoStartStateAsync();
 
         if (CcSwitch.IsAvailable) await RefreshCcSwitchStateAsync();
+
+        // 分池：把标了「自动启动」的池拉起来。
+        //
+        // 放在最后，因为它会启 node 子进程（每个几百毫秒）。
+        // 默认池那一个实际上已经被上面那条主流程起过了，这里会跳过它。
+        await AutoStartPoolsAsync();
     }
 
     // ── 路径探测 ───────────────────────────────────────────────
@@ -1047,6 +1054,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 // 自己人，当它已经在跑
                 AppendLog($"端口 {port} 上已经有网关在运行，直接采用它。");
                 IsGatewayRunning = true;
+
+                // 这条路径以前没登记到分池 —— 于是分池页上默认池显示「已停止」，
+                // 还多个「启动」按钮（点了会因为端口被占而报错）。
+                // 网关是真的在跑，两边得说同一句话。
+                BaseUrl = $"http://127.0.0.1:{port}/v1";
+                AdoptGatewayIntoDefaultPool(externalRunning: true, externalUrl: BaseUrl);
                 return;
             }
 
@@ -1081,6 +1094,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _chat?.Dispose();
             _chat = new ChatStreamClient(BaseUrl, ApiKey);
             IsGatewayRunning = true;
+
+            // 把主编这个实例登记给默认池，分池页才能对同一个进程说同一句话。
+            // （否则分池页会以为默认池是「已停止」，或者自己另起一个占端口）
+            AdoptGatewayIntoDefaultPool();
+
             FlashStatus("网关已启动");
             AppendLog($"网关就绪：{BaseUrl}");
         }
@@ -1137,6 +1155,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         BaseUrl = "";
         _chat?.Dispose();
         _chat = null;
+        // 实例已经退了，分池页上默认池也该显示「已停止」
+        RefreshPools();
     }
 
     private void OnGatewayLog(string line)
@@ -1477,6 +1497,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _generation?.Cancel();
         _generation?.Dispose();
         _chat?.Dispose();
+
+        // 先收掉所有非默认池的实例，再收主编那个 ——
+        // 默认池是「代管」主编的 GatewayRunner 的，两边都 Dispose 会重复 Kill。
+        try { _pools?.Dispose(); } catch { }
         _gateway.Dispose();
     }
 }
