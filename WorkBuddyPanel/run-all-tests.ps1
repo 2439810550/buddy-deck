@@ -67,6 +67,20 @@ $xamlCode = $LASTEXITCODE
 $xamlOut | Select-Object -Last 4 | ForEach-Object { Write-Host "  $_" }
 Add-Result "XAML 静态检查" ($xamlCode -eq 0)
 
+# ── ②b 池路由检查 ────────────────────────────────────────────
+#
+# 这条专门防「改账号的命令忘了带池」——
+# 那样会静默地改到默认池，界面不报错、只是改错了地方。
+# 实测踩到两次（添加账号、设为使用中/删除/重命名）。
+$routeScript = Join-Path $here "check-pool-routing.ps1"
+if (Test-Path $routeScript) {
+    Write-Head "池路由检查"
+    $routeOut = & powershell -NoProfile -ExecutionPolicy Bypass -File $routeScript 2>&1
+    $routeCode = $LASTEXITCODE
+    $routeOut | Select-Object -Last 6 | ForEach-Object { Write-Host "  $_" }
+    Add-Result "池路由检查" ($routeCode -eq 0)
+}
+
 # ── ③ 纯逻辑单元测试 ──────────────────────────────────────────
 $logicProj = Join-Path $here "tests/PoolLogic"
 if (Test-Path $logicProj) {
@@ -131,10 +145,18 @@ if (-not $SkipUi) {
         Write-Host "  跳过：还没编译出 $exe" -ForegroundColor Yellow
         Add-Result "界面点击测试（跳过：无 exe）" $true
     } else {
-        # 先关掉已有的开发实例，免得撞单实例锁
+        # 先关掉**我自己**的开发实例，免得撞单实例锁。
+        #
+        # ⚠ 只杀 bin\Release 那个 —— 那是本脚本编译出来的。
+        #   用户可能在跑 D:\BuddyDeck\ 或 publish.new\ 里的实例，
+        #   而且网关是那种实例的子进程 —— 杀了它，**助手自己的模型来源就断了**。
+        #   实测误杀过一次，助手当场失联。
         Get-CimInstance Win32_Process -Filter "Name='WorkBuddyPanel.exe'" -ErrorAction SilentlyContinue |
             Where-Object { $_.ExecutablePath -like "*bin*Release*" } |
-            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            ForEach-Object {
+                Write-Host "  停掉开发实例 PID $($_.ProcessId)" -ForegroundColor DarkGray
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
         Start-Sleep 3
 
         # 备份真实配置。

@@ -417,8 +417,48 @@ public sealed partial class MainViewModel
     /// 自动刷新会反复跑，而签到状态每天只变一次 —— 每次都问就是白花 2N 个请求。
     /// 实测完整刷新 4.0s，轻量刷新 2.0s。
     /// </summary>
+    /// <summary>
+    /// 列表里现在装的是哪个池的账号。
+    ///
+    /// 为什么需要记这个：
+    ///
+    /// 轻量刷新（RefreshAccountsLightAsync）只做「就地更新」——
+    /// 拿新数据去刷新已有的那几行，不增不减。它能工作的前提是
+    /// **列表和拉下来的数据属于同一个池**。
+    ///
+    /// 切池时 SelectedPool 已经变了，但列表里还是旧池的行。
+    /// 这时再跑轻量刷新，就会拿新池的数据去匹配旧池的行 id
+    /// —— 全对不上，一行也不更新，用户看到的就是「切了池但列表不变」。
+    /// 实测踩到。
+    ///
+    /// 所以每次重建列表时记一下当时的池，轻量刷新先比一下。
+    /// </summary>
+    private string _loadedPoolKey = "";
+
+    /// <summary>当前选中的池的标识（默认池是空串）。</summary>
+    private string CurrentPoolKey => SelectedPool is { IsDefault: false } p
+        ? p.Config.DirectoryName
+        : "";
+
+    /// <summary>列表里装的账号，是不是当前这个池的。</summary>
+    private bool PoolKeyMatchesLoaded()
+        => string.Equals(_loadedPoolKey, CurrentPoolKey, StringComparison.OrdinalIgnoreCase);
+
     public async Task RefreshAccountsLightAsync()
     {
+        // 池变了就不能做「就地更新」—— 那是给同一个池的增量刷新用的。
+        //
+        // 切池时会先把 SelectedPool 改掉、再由切页事件触发这里。
+        // 如果不管池就继续跑，就会拿着**新池**的数据去更新**旧池**的行
+        // （ids 全对不上，于是一行也不动，用户看到的就是本需要手点刷新）。
+        //
+        // 真正的重建交给 RefreshAccountsAsync —— 它会 Clear + 重填。
+        if (!PoolKeyMatchesLoaded())
+        {
+            AppendLog($"[刷新] 池已切到「{CurrentPoolLabel}」，交给完整刷新重建列表");
+            return;
+        }
+
         if (IsBusy || !CanRunNode || Accounts.Count == 0) return;
 
         // 不置 IsBusy：自动刷新是背景行为，不该把界面按钮都灰掉
@@ -912,6 +952,7 @@ public sealed partial class MainViewModel
         //   1. 它是 --maintain 拉起来的，屏幕上可能根本没开界面
         //   2. 即使用户开着界面，他此刻可能正看着某个朋友的池，
         //      于是默认池的号就永远不续期了
+        // pool: exempt —— 故意的例外，就是不走池路由
         var result = await RunCliAsync($"src/bin.js checkin --json{ProviderArgs()}");
         var json = CliRunner.ExtractJson(result.StdOut);
         if (json is null)
@@ -1021,6 +1062,13 @@ public sealed partial class MainViewModel
 
         IsBusy = true;
         BusyText = fast ? "正在读取账号…" : "正在刷新账号（含签到状态）…";
+
+        // 现在跑的是哪个池 —— 发命令之前先捕获。
+        //
+        // 不能等到写完 Accounts 再读 SelectedPool：那条命令要跑好几秒，
+        // 期间用户可能已经又切了别的池。
+        var poolKeyForThisLoad = CurrentPoolKey;
+
         try
         {
             var extra = fast ? " --no-checkin" : "";
@@ -1068,6 +1116,10 @@ public sealed partial class MainViewModel
                         row.CarryOver(prev.CheckinText, prev.RenewText);
                     Accounts.Add(row);
                 }
+
+                // 记下这批数据属于哪个池 —— 轻量刷新靠它判断能不能做「就地更新」。
+                // 如果不一致，轻量刷新就跳过去，让完整刷新去重建。
+                _loadedPoolKey = poolKeyForThisLoad;
             });
 
             var active = Accounts.FirstOrDefault(row => row.IsActive);
@@ -1138,7 +1190,14 @@ public sealed partial class MainViewModel
         {
             var args = $"src/bin.js accounts add{ProviderArgs()}";
             if (!string.IsNullOrWhiteSpace(label)) args += $" --label \"{label.Trim()}\"";
-            var result = await RunCliAsync(args);
+
+            // 必须走 RunPoolCliAsync —— 带 WORKBUDDY_API_HOME，才能加到当前看的那个池里。
+            //
+            // 这里曾经用的是 RunCliAsync（不带池），于是不管你在哪个池里点
+            // 「添加账号」，号都跑到**默认池**去了：
+            //   新建池 → 切过去 → 添加账号 → 回默认池一看，多了一个号
+            // 而新池里什么都没有。实测踩到。
+            var result = await RunPoolCliAsync(args);
             AccountsResult = result.Combined;
             AppendLog("[账号] " + result.Combined);
             if (result.Ok) FlashStatus("账号已导入"); else SetStatus("导入失败，看「日志」标签页");
@@ -1253,7 +1312,13 @@ public sealed partial class MainViewModel
         BusyText = "正在执行…";
         try
         {
-            var result = await RunCliAsync(args);
+            // 必须走 RunPoolCliAsync —— 这里跑的全是「改账号」的命令：
+            //   accounts use / clear / remove / rename
+            // 不带池的话它们全作用在**默认池**上：
+            //   在朋友的池里点「设为使用中」→ 改的是默认池的当前账号
+            //   在朋友的池里点「删除」→ 删的是默认池里的同名号
+            // 实测就踩到了「添加账号加到默认池」。
+            var result = await RunPoolCliAsync(args);
             AccountsResult = result.Combined;
             AppendLog("[账号] " + result.Combined);
             if (result.Ok) FlashStatus(successNote); else SetStatus("操作失败，看「日志」标签页");

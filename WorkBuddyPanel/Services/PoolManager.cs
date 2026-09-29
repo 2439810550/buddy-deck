@@ -75,6 +75,17 @@ public sealed class PoolRuntime : IDisposable
         LastError = null;
     }
 
+    /// <summary>
+    /// 实例退出了（意外退出也算）。
+    ///
+    /// 为什么需要它：不通知界面的话，池已经退了，但分池页上那个卡片
+    /// 还显示「运行中」—— 「启动」按钮于是点不动，用户看到的就是
+    /// 「点了没反应 / 启动不了」。实测踩到。
+    ///
+    /// PoolRuntime 抛，PoolManager 转发给界面。
+    /// </summary>
+    public event Action<PoolConfig>? Exited;
+
     public async Task StartAsync(string nodePath, string apiDir, string provider, string? authFile)
     {
         if (IsRunning) return;
@@ -84,7 +95,11 @@ public sealed class PoolRuntime : IDisposable
 
         var runner = new GatewayRunner { PoolName = Config.DisplayName };
         runner.LogLine += line => Log?.Invoke($"[{Config.DisplayName}] {line}");
-        runner.Exited += _ => Log?.Invoke($"[{Config.DisplayName}] 实例已退出");
+        runner.Exited += _ =>
+        {
+            Log?.Invoke($"[{Config.DisplayName}] 实例已退出");
+            Exited?.Invoke(Config);
+        };
 
         try
         {
@@ -167,6 +182,14 @@ public sealed class PoolManager : IDisposable
     /// <summary>任何池打印的日志。</summary>
     public event Action<string>? Log;
 
+    /// <summary>
+    /// 某个池的实例退出了。
+    ///
+    /// 界面收到之后要刷新分池页 —— 否则那个卡片一直显示「运行中」，
+    /// 「启动」按钮点不动（实测踩到）。
+    /// </summary>
+    public event Action<PoolConfig>? PoolExited;
+
     public void Load()
     {
         var loaded = PoolStore.Load();
@@ -189,6 +212,7 @@ public sealed class PoolManager : IDisposable
                 IsAdopted = pool.IsDefault,
             };
             rt.Log += line => Log?.Invoke(line);
+            rt.Exited += cfg => PoolExited?.Invoke(cfg);
             _runtimes[key] = rt;
         }
         return rt;

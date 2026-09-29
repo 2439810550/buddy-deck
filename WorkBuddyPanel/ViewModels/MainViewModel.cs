@@ -1161,14 +1161,37 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnGatewayLog(string line)
     {
-        // 网关的日志线程不是 UI 线程，转发到 UI 线程
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is null || dispatcher.CheckAccess()) AppendLog(line);
-        else dispatcher.BeginInvoke(() => AppendLog(line));
+        // 网关的日志线程不是 UI 线程，转发到 UI 线程。
+        //
+        // 注：AppendLog 自己也会做这个检查，这里保留只是为了语义清楚。
+        AppendLog(line);
     }
 
     private void AppendLog(string line)
     {
+        // 必须在 UI 线程上改 Log —— 它绑到界面，ObservableCollection 的
+        // CollectionChanged 会直接通知 WPF 的 CollectionView，
+        // 从别的线程改会抛：
+        //
+        //     System.NotSupportedException:
+        //     该类型的 CollectionView 不支持从调度程序线程以外的线程
+        //     对其 SourceCollection 进行的更改。
+        //
+        // 这个坑踩过两次：
+        //   1. RefreshEnvironment 在 Task.Run 里改 EnvironmentChecks
+        //   2. 分池的 PoolManager.Log += AppendLog —— 池的网关
+        //      输出事件在**线程池线程**上触发（GatewayRunner.HandleLine），
+        //      于是启动池时直接闪退
+        //
+        // 所以保护做在这里（而不是每个调用入口）—— AppendLog 是个
+        // 天然会被后台线程调用的地方，只堵入口迟早还会漏。
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(() => AppendLog(line));
+            return;
+        }
+
         var stamp = DateTime.Now.ToString("HH:mm:ss");
         Log.Add($"[{stamp}] {line}");
         while (Log.Count > 2000) Log.RemoveAt(0);

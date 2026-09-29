@@ -326,6 +326,13 @@ public sealed partial class MainViewModel
                 _pools = new PoolManager(Application.Current?.Dispatcher
                     ?? System.Windows.Threading.Dispatcher.CurrentDispatcher);
                 _pools.Log += AppendLog;
+
+                // 池实例退出时刷新分池页。
+                //
+                // 不刷的话那个卡片一直显示「运行中」，但进程早没了 ——
+                // 「启动」按钮于是点不动，用户看到的是「启动不了」。实测踩到。
+                _pools.PoolExited += _ => RefreshPools();
+
                 _pools.Load();
             }
             return _pools;
@@ -408,10 +415,34 @@ public sealed partial class MainViewModel
         {
             var configs = PoolManagerRef.Pools.ToList();
 
-            Pools.Clear();
-            foreach (var cfg in configs)
+            // 池的**个数和顺序**没变时，只刷新现有行，不重建列表。
+            //
+            // 重建（Clear + Add）会让 ListBox 整个重画 —— 界面会闪一下，
+            // 而且用户如果正滚动到一半，位置会跳回顶部。
+            //
+            // 但「池退出了要刷新状态」又必须能反映出来 ——
+            // 那种情况只是计算属性变了（IsRunning），
+            // 调 PoolRowVm.Refresh() 就够了，不用重建。
+            var sameShape = Pools.Count == configs.Count;
+            if (sameShape)
             {
-                Pools.Add(new PoolRowVm(this, cfg, PoolManagerRef.RuntimeOf(cfg)));
+                for (var i = 0; i < configs.Count; i++)
+                {
+                    if (!ReferenceEquals(Pools[i].Config, configs[i])) { sameShape = false; break; }
+                }
+            }
+
+            if (sameShape)
+            {
+                foreach (var row in Pools) row.Refresh();
+            }
+            else
+            {
+                Pools.Clear();
+                foreach (var cfg in configs)
+                {
+                    Pools.Add(new PoolRowVm(this, cfg, PoolManagerRef.RuntimeOf(cfg)));
+                }
             }
 
             var running = Pools.Count(p => p.IsRunning);
@@ -437,15 +468,63 @@ public sealed partial class MainViewModel
         Raise(nameof(CurrentPoolLabel));
         Raise(nameof(HasSelectedPool));
         Raise(nameof(ShowBackToDefaultPool));
-        _ = RefreshAccountsAsync(fast: true);
         FlashStatus($"正在显示「{pool.DisplayName}」的账号");
 
-        // 光切数据源不够 —— 用户还在分池页上，看不到任何变化，
-        // 会以为按钮坏了。得让窗口把标签页也切过去。
+        // 先切页，再刷新。
         //
-        // 用事件而不是直接改 MainTabs：VM 不该知道界面的控件结构
-        // （那样就没法脱离 WPF 测它了）。
+        // 顺序很重要：以前是先 _ = RefreshAccountsAsync() 再切页，
+        // 而切页会触发 SelectionChanged → RefreshAccountsLightAsync，
+        // 两个刷新赛跑，轻量那个可能先跑完、拿旧池的数据盖掉新的。
+        //
+        // 现在：
+        //   1. 切页（只切页，不刷）
+        //   2. 完整刷新（重建列表 —— 增删号都能反映出来）
+        //
+        // 轻量刷新那边也加了池归属检查，不一致就跳过。
         RequestAccountsTab?.Invoke();
+
+        // 用 await 而不是 fire-and-forget：
+        // 以前是 `_ = RefreshAccountsAsync(...)` —— 抛异常会被静默吞掉，
+        // 表现就是「切了池但列表一直不变」。那条路难查得很。
+        _ = RefreshAfterPoolSwitchAsync(pool.DisplayName);
+    }
+
+    /// <summary>
+    /// 切池后的刷新：先快速出列表，再后台补完整数据。
+    ///
+    /// ── 为什么不能只刷一趟 ────────────────────────────────────
+    ///
+    /// 完整刷新要逐个账号问上游「今天签到了吗」，17 个号要 10 秒左右。
+    /// 切个池等 10 秒，用户以为卡死了。
+    ///
+    /// 但只跑快速那趟（--no-checkin）又不对：签到状态、积分都是旧的，
+    /// 用户看到的是上一个池的数字 —— 实测报的就是这个「刷新不及时」。
+    ///
+    /// 所以和启动时一样做两趟：
+    ///   第一趟 5 秒出列表（名字 / 到期天数都是新的，只是没有签到状态）
+    ///   第二趟后台补签到（不挡用户看列表）
+    /// </summary>
+    private async Task RefreshAfterPoolSwitchAsync(string poolName)
+    {
+        try
+        {
+            // 第一趟：快速出列表
+            await RefreshAccountsAsync(fast: true);
+            AppendLog($"[分池] 已切到「{poolName}」，列表现有 {Accounts.Count} 个号");
+
+            // 第二趟：后台补签到状态和积分
+            //
+            // 用 await 而不是 Task.Run 再嵌套 —— 这个方法本身已经被 fire-and-forget
+            // 调用了（调用方 `_ = RefreshAfterPoolSwitchAsync(...)`），
+            // 再套一层 Task.Run 只会多一个线程。
+            await RefreshAccountsAsync(fast: false);
+            AppendLog($"[分池] 「{poolName}」的签到状态已补齐");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[分池] 切到「{poolName}」后刷新失败：{ex.Message}");
+            SetStatus("切池后账号列表刷新失败，看「日志」标签页");
+        }
     }
 
     /// <summary>请求窗口切到「账号」标签页。</summary>
@@ -458,7 +537,7 @@ public sealed partial class MainViewModel
         Raise(nameof(CurrentPoolLabel));
         Raise(nameof(HasSelectedPool));
         Raise(nameof(ShowBackToDefaultPool));
-        _ = RefreshAccountsAsync(fast: true);
+        _ = RefreshAfterPoolSwitchAsync("默认池");
         FlashStatus("已回到默认池");
     }
 
