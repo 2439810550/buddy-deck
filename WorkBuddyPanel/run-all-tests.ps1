@@ -145,26 +145,17 @@ if (-not $SkipUi) {
         Write-Host "  跳过：还没编译出 $exe" -ForegroundColor Yellow
         Add-Result "界面点击测试（跳过：无 exe）" $true
     } else {
-        # 先关掉**我自己**的开发实例，免得撞单实例锁。
+        # ── 备份配置（要在**任何**操作之前）────────────────────
         #
-        # ⚠ 只杀 bin\Release 那个 —— 那是本脚本编译出来的。
-        #   用户可能在跑 D:\BuddyDeck\ 或 publish.new\ 里的实例，
-        #   而且网关是那种实例的子进程 —— 杀了它，**助手自己的模型来源就断了**。
-        #   实测误杀过一次，助手当场失联。
-        Get-CimInstance Win32_Process -Filter "Name='WorkBuddyPanel.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.ExecutablePath -like "*bin*Release*" } |
-            ForEach-Object {
-                Write-Host "  停掉开发实例 PID $($_.ProcessId)" -ForegroundColor DarkGray
-                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-            }
-        Start-Sleep 3
-
-        # 备份真实配置。
+        # 界面测试会真的点按钮 —— 其中「设置」页的端口输入框、
+        # 「换一个空闲的端口」之类会直接写 %APPDATA%\WorkBuddyPanel\settings.json
+        # 和 pools.json。
         #
-        # 界面测试会真的点按钮 —— 其中「换一个空闲的端口」之类的按钮
-        # 会直接写 %APPDATA%\WorkBuddyPanel\settings.json。
-        # 不备一份的话，跑完测试用户的端口/路径就被改掉了。
-        # 实测踩过：用户的端口从 8787 变成 8789。
+        # 不备一份的话，跑完测试用户的端口就变了。实测踩过两次：
+        # 一次 8787→8789，一次两个池的端口被整体挪了一格。
+        #
+        # 备份放在最前面（而不是界面测试那一支里）——
+        # 因为后面任何一步失败都不该导致「改了配置但没恢复」。
         $cfgDir = Join-Path $env:APPDATA "WorkBuddyPanel"
         $backups = @{}
         foreach ($f in @("settings.json", "pools.json")) {
@@ -179,12 +170,38 @@ if (-not $SkipUi) {
             Write-Host "  备份了 $($backups.Count) 个配置文件（测完恢复）" -ForegroundColor DarkGray
         }
 
+        # 先关掉**我自己**的开发实例，免得撞单实例锁。
+        #
+        # ⚠ 只杀 bin\Release 那个 —— 那是本脚本编译出来的。
+        #   用户可能在跑 D:\BuddyDeck\ 或 publish.new\ 里的实例，
+        #   而且网关是那种实例的子进程 —— 杀了它，**助手自己的模型来源就断了**。
+        #   实测误杀过一次，助手当场失联。
+        # 只停「本脚本编译出来那个 exe」的实例。
+        #
+        # 用户的实例在 D:\BuddyDeck 或 publish.new —— 那些不能碰，
+        # 因为网关是它们的子进程，杀了助手自己的模型来源就断了。
+        Get-CimInstance Win32_Process -Filter "Name='WorkBuddyPanel.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.ExecutablePath -eq $exe } |
+            ForEach-Object {
+                Write-Host "  停掉测试实例 PID $($_.ProcessId)" -ForegroundColor DarkGray
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+        Start-Sleep 3
+
         Start-Process $exe
         Write-Host "  等程序起来（$StartupWait 秒）…" -ForegroundColor DarkGray
         Start-Sleep $StartupWait
 
+        # 找**刚才启动的这个**实例。
+        #
+        # 不写死 "*bin*Release*" —— putput 路径会变（bin\Release、
+        # publish.licensed、_smoke3…）。写死的话，在别的路径上跑时
+        # $proc 是 null，后面的「恢复配置」就不会执行 ——
+        # 实测就是这么把用户端口改丢的。
+        #
+        # 改成「exe 路径等于本脚本编译出来那个」。
         $proc = Get-CimInstance Win32_Process -Filter "Name='WorkBuddyPanel.exe'" -ErrorAction SilentlyContinue |
-                Where-Object { $_.ExecutablePath -like "*bin*Release*" } |
+                Where-Object { $_.ExecutablePath -eq $exe } |
                 Select-Object -First 1
 
         if ($proc) {
@@ -211,6 +228,19 @@ if (-not $SkipUi) {
         } else {
             Write-Host "  程序没起来" -ForegroundColor Red
             Add-Result "界面点击测试" $false
+        }
+
+        # ── 恢复配置（不管上面成功失败都要跑）──────────────────
+        foreach ($pair in $backups.GetEnumerator()) {
+            try {
+                Copy-Item $pair.Value $pair.Key -Force
+                Remove-Item $pair.Value -Force -ErrorAction SilentlyContinue
+            } catch {
+                Write-Host "  ⚠ 恢复 $($pair.Key) 失败：$($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+        if ($backups.Count -gt 0) {
+            Write-Host "  已恢复配置文件" -ForegroundColor DarkGray
         }
     }
 }

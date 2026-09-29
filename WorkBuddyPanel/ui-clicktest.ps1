@@ -136,6 +136,27 @@ if ($Hwnd -ne 0) {
 $handle = $root.Current.NativeWindowHandle
 Write-Host "窗口：$($root.Current.Name)（PID $($root.Current.ProcessId)，句柄 $handle）" -ForegroundColor Cyan
 
+# ── 备份配置 ─────────────────────────────────────────────────
+#
+# 即使跳过了「保存设置」，程序自己也可能在某些操作里写配置
+# （自动保存、端口占用的回退等）。
+#
+# 所以这个脚本自己也要备一份 —— 不能指望调用方（run-all-tests.ps1）
+# 一定备过。实测：直接调这个脚本时，用户的端口被改成了 8788。
+$cfgDir = Join-Path $env:APPDATA "WorkBuddyPanel"
+$cfgBackups = @{}
+foreach ($f in @("settings.json", "pools.json")) {
+    $src = Join-Path $cfgDir $f
+    if (Test-Path $src) {
+        $bak = "$src.clicktest-backup"
+        Copy-Item $src $bak -Force
+        $cfgBackups[$src] = $bak
+    }
+}
+if ($cfgBackups.Count -gt 0) {
+    Write-Host "  备份了 $($cfgBackups.Count) 个配置文件" -ForegroundColor DarkGray
+}
+
 # ── 清掉残留对话框（上次跑崩留下的）─────────────────────────
 # 连清三轮 —— 对话框可能一层套一层（父表单 + 校验提示），
 # 一轮只关得掉最上面那层。实测：只清一轮时，前一个标签页留下的
@@ -200,7 +221,7 @@ if ($Tab -ne "") {
 #   恢复默认设置     —— 会把路径重置成发布版默认值，在开发目录里就废了
 #                       （实测踩过：点完它之后所有账号操作都报「找不到文件」）
 #   发送             —— 会真的发请求花积分
-$skipPattern = "退出|关闭|取消|卸载|删除|停止|打开目录|恢复默认|发送"
+$skipPattern = "退出|关闭|取消|卸载|删除|停止|打开目录|恢复默认|保存设置|发送|浏览|自动探测"
 
 $btnCond = New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
@@ -351,6 +372,19 @@ if ($bad.Count -gt 0) {
     Write-Host ""
     Write-Host "  其中有 $($bad.Count) 个含异常信息 —— 这是 bug。" -ForegroundColor Red
     exit 1
+}
+
+# ── 恢复配置 ─────────────────────────────────────────────────
+foreach ($pair in $cfgBackups.GetEnumerator()) {
+    try {
+        Copy-Item $pair.Value $pair.Key -Force
+        Remove-Item $pair.Value -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-Host "  恢复 $($pair.Key) 失败：$($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+if ($cfgBackups.Count -gt 0) {
+    Write-Host "  已恢复配置文件" -ForegroundColor DarkGray
 }
 
 if ($failures.Count -gt 0) { exit 1 }
