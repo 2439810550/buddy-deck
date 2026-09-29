@@ -102,6 +102,10 @@ public sealed class PoolRowVm : ObservableObject
     /// <summary>这个池里有几个账号。-1 = 读不出来。</summary>
     public int AccountCount => _owner.PoolManagerRef.CountAccounts(_config);
 
+    /// <summary>账号概况（名字、当前用哪个）—— 给卡片上的「当前使用」和名单用。</summary>
+    private PoolAccountSummary Summary => _owner.PoolManagerRef.ReadAccounts(_config);
+
+    /// <summary>卡片上第一行：账号数。</summary>
     public string AccountCountText => AccountCount switch
     {
         < 0 => "账号数未知",
@@ -109,6 +113,14 @@ public sealed class PoolRowVm : ObservableObject
         1 => "1 个账号",
         _ => $"{AccountCount} 个账号",
     };
+
+    /// <summary>卡片上第二行：当前用的是哪个号。</summary>
+    public string ActiveAccountText => Summary.ActiveText;
+
+    /// <summary>卡片上第三行：都有哪些号。</summary>
+    public string AccountNamesText => Summary.NamesText;
+
+    public bool HasAccountNames => Summary.HasNames;
 
     // ── 三种 URL ───────────────────────────────────────────────
     //
@@ -160,6 +172,9 @@ public sealed class PoolRowVm : ObservableObject
         Raise(nameof(HasError));
         Raise(nameof(AccountCount));
         Raise(nameof(AccountCountText));
+        Raise(nameof(ActiveAccountText));
+        Raise(nameof(AccountNamesText));
+        Raise(nameof(HasAccountNames));
         Raise(nameof(UrlLocal));
         Raise(nameof(UrlLan));
         Raise(nameof(UrlTailscale));

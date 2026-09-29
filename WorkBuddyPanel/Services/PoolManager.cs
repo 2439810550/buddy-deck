@@ -350,6 +350,73 @@ public sealed class PoolManager : IDisposable
     }
 
     /// <summary>
+    /// 一个池的账号概况。
+    ///
+    /// 为什么要这个方法：用户问「多池子的话每个池子用哪个账号在哪看」。
+    /// 以前卡片上只显示「N 个账号」，要知道用哪个号得点「管理账号」跳过去看 ——
+    /// 池一多就得一个个点，很绕。
+    ///
+    /// 直接读保险库文件（不走 node）：
+    ///   · node 启动一次要好几秒，而这个信息只需要本地文件
+    ///   · 这里不关心「登录还有效吗」这种活信息，只看「存了哪些号、选的哪个」
+    /// </summary>
+    public PoolAccountSummary ReadAccounts(PoolConfig pool)
+    {
+        try
+        {
+            var path = pool.VaultPath();
+            if (!File.Exists(path)) return PoolAccountSummary.Empty;
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            var root = doc.RootElement;
+
+            var labels = new List<string>();
+            var ids = new List<string>();
+
+            if (root.TryGetProperty("accounts", out var accs) && accs.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var a in accs.EnumerateArray())
+                {
+                    if (a.ValueKind != JsonValueKind.Object) continue;
+
+                    var label = a.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String
+                        ? l.GetString() ?? ""
+                        : "";
+                    var uid = a.TryGetProperty("uid", out var u) && u.ValueKind == JsonValueKind.String
+                        ? u.GetString() ?? ""
+                        : "";
+
+                    // 没名字就用 uid 前 8 位 —— 和账号页的规矩保持一致
+                    if (string.IsNullOrWhiteSpace(label))
+                        label = uid.Length > 8 ? uid[..8] : uid;
+
+                    labels.Add(label);
+                    ids.Add(uid);
+                }
+            }
+
+            // 当前选中的是哪个
+            var activeId = root.TryGetProperty("activeId", out var act) && act.ValueKind == JsonValueKind.String
+                ? (act.GetString() ?? "").TrimEnd(':')
+                : "";
+
+            string? activeLabel = null;
+            if (activeId.Length > 0)
+            {
+                var idx = ids.FindIndex(x => x.Equals(activeId, StringComparison.OrdinalIgnoreCase));
+                if (idx >= 0) activeLabel = labels[idx];
+            }
+
+            return new PoolAccountSummary(labels, activeLabel);
+        }
+        catch
+        {
+            // 读坏了不报错，界面显示「读不出来」
+            return new PoolAccountSummary(null, null);
+        }
+    }
+
+    /// <summary>
     /// 列出某个池的账号（走 node，因为这里要的是「登录还有效吗」这类活信息）。
     /// 命令本身和以前一模一样 —— 区别只在多带了一个 WORKBUDDY_API_HOME。
     /// </summary>
@@ -434,4 +501,51 @@ public sealed class PoolManager : IDisposable
         [System.Text.Json.Serialization.JsonPropertyName("accounts")]
         public List<JsonElement>? Accounts { get; set; }
     }
+}
+
+/// <summary>
+/// 一个池的账号概况 —— 给分池页的卡片用。
+///
+/// 用户问「多池子的话每个池子用哪个账号在哪看」，以前得点「管理账号」
+/// 跳过去才知道。现在卡片上直接写出来。
+///
+/// @param Labels       所有账号的名字（按保险库里的顺序）。null = 读不出来。
+/// @param ActiveLabel  当前选中的那个号的名字。null = 没选（或选了个不存在的、读不出来）。
+/// </summary>
+public sealed record PoolAccountSummary(List<string>? Labels, string? ActiveLabel)
+{
+    public static readonly PoolAccountSummary Empty = new(new List<string>(), null);
+
+    /// <summary>读不出来（文件坏了 / 权限问题）。</summary>
+    public bool IsBroken => Labels is null;
+
+    public int Count => Labels?.Count ?? 0;
+
+    /// <summary>卡片上那行「当前使用：XXX」。</summary>
+    public string ActiveText => IsBroken
+        ? "账号读不出来"
+        : Count == 0
+            ? "还没有账号"
+            : ActiveLabel is { Length: > 0 } name
+                ? $"当前使用：{name}"
+                : "当前使用：桌面 App 登录的那个号";
+
+    /// <summary>账号名单（太多了就截断）。</summary>
+    public string NamesText
+    {
+        get
+        {
+            if (IsBroken) return "";
+            if (Labels is null || Labels.Count == 0) return "";
+
+            // 最多列 6 个，多了省略 —— 卡片宽度有限
+            const int max = 6;
+            var shown = Labels.Take(max).ToList();
+            var text = string.Join("、", shown);
+            if (Labels.Count > max) text += $" 等 {Labels.Count} 个";
+            return text;
+        }
+    }
+
+    public bool HasNames => NamesText.Length > 0;
 }

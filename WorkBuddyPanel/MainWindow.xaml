@@ -1143,6 +1143,23 @@
                                                                                     <TextBlock Text="{Binding AccountCountText}" FontSize="12.5"
                                                                                                Foreground="{StaticResource TextSub}" />
                                                                                 </StackPanel>
+
+                                                                                <!--
+                                                                                    这个池用的是哪个号。
+
+                                                                                    以前只有「N 个账号」，要知道用哪个号
+                                                                                    得点「管理账号」跳过去看 —— 池一多就
+                                                                                    得一个个点，很绕。
+                                                                                -->
+                                                                                <TextBlock Text="{Binding ActiveAccountText}" FontSize="12.5"
+                                                                                           Margin="0,5,0,0" TextWrapping="Wrap"
+                                                                                           Foreground="{StaticResource TextMain}" />
+
+                                                                                <!-- 都有哪些号（超过 6 个就省略） -->
+                                                                                <TextBlock Text="{Binding AccountNamesText}" FontSize="12"
+                                                                                           Margin="0,3,0,0" TextWrapping="Wrap"
+                                                                                           Foreground="{StaticResource TextSub}"
+                                                                                           Visibility="{Binding HasAccountNames, Converter={StaticResource BoolToVis}}" />
                                         
                                                                                 <!-- 接入地址 -->
                                                                                 <Border Background="#F6F8FA" CornerRadius="6"
