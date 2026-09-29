@@ -21,7 +21,11 @@ sys.stdout.reconfigure(encoding="utf-8")
 HERE = os.path.dirname(os.path.abspath(__file__))     # ...\WorkBuddyPanel
 ROOT = os.path.dirname(HERE)                          # ...\workfandaiapi
 API = os.path.join(ROOT, "workbuddy_api")             # ...\workfandaiapi\workbuddy_api
-NODE = r"D:\nodejs\node.exe"
+# node 的位置。默认用本机装的那个；换机器时可以用 VERIFY_NODE 环境变量
+# 指定，或者退回 PATH 里能找到的。
+NODE = os.environ.get("VERIFY_NODE") or r"D:\nodejs\node.exe"
+if not os.path.exists(NODE):
+    NODE = shutil.which("node") or NODE
 VAULT_ROOT = os.path.join(os.path.expanduser("~"), ".workbuddy-api")
 
 ok = 0
