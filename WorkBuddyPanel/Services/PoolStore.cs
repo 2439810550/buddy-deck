@@ -66,11 +66,46 @@ public sealed class PoolConfig
     /// <summary>
     /// 这个池的保险库目录（绝对路径）。
     /// 不保证存在 —— 建目录是 <see cref="PoolStore"/> 的事。
+    ///
+    /// ── 为什么要做边界检查 ──────────────────────────────────
+    ///
+    /// 删池时会 Directory.Delete(recursive: true)。而 DirectoryName 是从
+    /// pools.json 读的 —— 用户可以手改，也可能被别的东西篡改。
+    ///
+    /// 不检查的话：
+    ///
+    ///     "DirectoryName": "..\\..\\..\\重要文件"
+    ///         ↓ Path.Combine 保留 ".."
+    ///     C:\Users\DK\.workbuddy-api\pools\..\..\..\重要文件
+    ///         ↓ Windows 解析
+    ///     C:\Users\重要文件
+    ///         ↓ 删池时
+    ///     Directory.Delete(recursive: true)   ← 用户的文件没了
+    ///
+    /// 所以这里强制归一化后必须落在 pools 目录里面，否则拒掉。
     /// </summary>
     public string VaultHome()
     {
         var root = PoolStore.RootHome();
-        return IsDefault ? root : Path.Combine(root, "pools", DirectoryName);
+        if (IsDefault) return root;
+
+        var poolsDir = Path.GetFullPath(Path.Combine(root, "pools"));
+        var candidate = Path.GetFullPath(Path.Combine(poolsDir, DirectoryName));
+
+        // 归一化之后必须还在 pools 目录里。
+        //
+        // 前缀要比对 "pools" + 分隔符，不能只比 "pools" ——
+        // 否则 "pools恶意" 这种目录名会被误判成在内部。
+        var prefix = poolsDir + Path.DirectorySeparatorChar;
+        if (!candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"池「{DisplayName}」的目录名不合法（{DirectoryName}）。\n\n" +
+                "它指向了账号目录之外的位置 —— 多半是配置文件被改过。\n" +
+                "到「分池」页把那个池删掉重建一个即可。");
+        }
+
+        return candidate;
     }
 
     /// <summary>保险库目录里的账号文件。</summary>
@@ -114,23 +149,67 @@ public static class PoolStore
     /// <summary>
     /// 从一个界面名字造出磁盘目录名。
     ///
-    /// 只保留 ASCII 字母数字，转小写，加 "p-" 前缀并截断 ——
-    /// 这个名字会进路径和子进程环境变量，越保守越好。中文名会变成空串，
-    /// 这时退回用端口号，保证仍然唯一。
+    /// ── 为什么保留中文 ──────────────────────────────────────
+    ///
+    /// 早期版本只留 ASCII，中文名一律退化成 "p-port8788"。
+    /// 后果是用户去 ~/.workbuddy-api/pools/ 下一看：
+    ///
+    ///     p-port8788   p-port8789   p-port8790
+    ///
+    /// 完全认不出哪个是哪个 —— 想手工备份某个池都做不到。
+    ///
+    /// 已实测确认中文目录名在这条链路上没问题：
+    ///   · Windows 能建目录、能写文件
+    ///   · 通过 WORKBUDDY_API_HOME 传给 node 后，node 读得到、内容不乱码
+    ///
+    /// ── 保留什么、去掉什么 ────────────────────────────────
+    ///
+    /// 只挡**真正会出问题**的：
+    ///   · 路径分隔符 / \ 和盘符 : —— 会造出路径穿越或跳到别处
+    ///   · Windows 保留字符 * ? " &lt; &gt; | —— 文件系统直接拒
+    ///   · 控制字符 —— 会把终端和日志搞乱
+    ///   · . 开头的——避免 ".." 和隐藏文件误认
+    ///   · 首尾空格和点 —— Windows 会默默替掉，导致目录名和预期不符
     /// </summary>
     public static string MakeDirectoryName(string displayName, int port)
     {
         var sb = new System.Text.StringBuilder();
+
         foreach (var ch in displayName ?? "")
         {
-            if (ch is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9')
-                sb.Append(char.ToLowerInvariant(ch));
-            else if (ch is '-' or '_' && sb.Length > 0 && sb[^1] != '-')
-                sb.Append('-');
+            // 路径分隔符 / 盘符：最大的危险，直接丢
+            if (ch is '/' or '\\' or ':') continue;
+
+            // Windows 文件名的非法字符
+            if (ch is '*' or '?' or '"' or '<' or '>' or '|') continue;
+
+            // 控制字符（含 tab / 换行）
+            if (char.IsControl(ch)) continue;
+
+            // 开头的点：避免造出 "." / ".." / 隐藏文件
+            if (ch == '.' && sb.Length == 0) continue;
+
+            // 连续的点也去掉 ——
+            // 实测踩到："a/../../b" 把斜杠丢掉之后剩 "a....b"，
+            // 里头带着 ".."。虽然这里已经不是路径分隔符了（不会被当成
+            // 上级目录），但看着就脏，而且万一哪层工具有别的解释就麻烦了。
+            // 规则：一个名字里最多一个连续的点（给 "版本1.2" 这种留余地）
+            if (ch == '.' && sb.Length > 0 && sb[^1] == '.') continue;
+
+            sb.Append(ch);
         }
-        var slug = sb.ToString().Trim('-');
-        if (slug.Length > 24) slug = slug[..24].TrimEnd('-');
-        if (slug.Length == 0) slug = "port" + port.ToString();
+
+        // 首尾空白和点都要去掉 —— Windows 文件名不能以点或空格结尾
+        var slug = sb.ToString().Trim().Trim('.', ' ');
+
+        // 长度上限。算上 "p-" 前缀一共不超过 30 个字符。
+        // 中文一个字符占 3 字节，30 个字符在路径 260 限制、各种工具里都比较安全。
+        const int maxSlug = 26;
+        if (slug.Length > maxSlug) slug = slug[..maxSlug].TrimEnd('.', ' ');
+
+        // 清完什么都不剩（全中文标点、全空格之类）—— 退回端口号
+        if (slug.Length == 0) slug = "池" + port.ToString();
+
         return "p-" + slug;
     }
 

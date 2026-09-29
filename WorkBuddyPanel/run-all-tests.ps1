@@ -1,0 +1,176 @@
+﻿<#
+    跑全部测试。改完代码跑这一个就够了。
+
+    用法：
+        cd WorkBuddyPanel
+        powershell -ExecutionPolicy Bypass -File run-all-tests.ps1
+
+        # 跳过界面测试（那步要起程序、慢，而且要有桌面会话）
+        powershell -ExecutionPolicy Bypass -File run-all-tests.ps1 -SkipUi
+
+    依次跑：
+      ① 编译
+      ② XAML 静态检查（绑定 + 资源引用）
+      ③ 纯逻辑单元测试（PoolStore / VaultMover）
+      ④ 分池隔离验证
+      ⑤ 界面点击测试（8 个标签页）
+
+    退出码 0 = 全过。
+
+    ── 两个踩过的坑 ────────────────────────────────────────
+
+    ⚠ 路径字符串一律用正斜杠。
+      PowerShell 里 "bin\Release\net8..." 的 \n 是**换行符** ——
+      路径会断成两截，然后永远找不到文件。本文件里出现过这个错。
+
+    ⚠ 不要在判断退出码的地方接管道。
+      & dotnet build ... | Select-String   ← $LASTEXITCODE 变成 Select-String 的，
+      结果失败的任务也报成功。实测假报过。
+#>
+[CmdletBinding()]
+param(
+    [switch]$SkipUi,
+    [int]$StartupWait = 34
+)
+
+$ErrorActionPreference = "Continue"
+$here = $PSScriptRoot
+
+$results = @()
+$failed = 0
+
+function Write-Head([string]$text) {
+    Write-Host ""
+    Write-Host ("=" * 64) -ForegroundColor DarkCyan
+    Write-Host "  $text" -ForegroundColor Cyan
+    Write-Host ("=" * 64) -ForegroundColor DarkCyan
+}
+
+function Add-Result([string]$name, [bool]$isOk) {
+    $script:results += [pscustomobject]@{ Name = $name; Ok = $isOk }
+    if (-not $isOk) { $script:failed++ }
+}
+
+# ── ① 编译 ────────────────────────────────────────────────────
+Write-Head "编译（Release）"
+
+$buildOut = & dotnet build (Join-Path $here "WorkBuddyPanel.csproj") -c Release 2>&1
+$buildCode = $LASTEXITCODE
+$buildOut | Where-Object { $_ -match "error|已成功|Build succeeded" } | Select-Object -First 5 | ForEach-Object { Write-Host "  $_" }
+Add-Result "编译（Release）" ($buildCode -eq 0)
+
+# ── ② XAML 静态检查 ───────────────────────────────────────────
+Write-Head "XAML 静态检查"
+
+$xamlOut = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here "check-xaml.ps1") 2>&1
+$xamlCode = $LASTEXITCODE
+$xamlOut | Select-Object -Last 4 | ForEach-Object { Write-Host "  $_" }
+Add-Result "XAML 静态检查" ($xamlCode -eq 0)
+
+# ── ③ 纯逻辑单元测试 ──────────────────────────────────────────
+$logicProj = Join-Path $here "tests/PoolLogic"
+if (Test-Path $logicProj) {
+    Write-Head "纯逻辑单元测试（PoolStore / VaultMover）"
+
+    Push-Location $logicProj
+    try {
+        $logicOut = & dotnet run -c Release 2>&1
+        $logicCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+
+    $logicOut |
+        Where-Object { $_ -notmatch "warning CA1416" } |
+        Select-Object -Last 8 |
+        ForEach-Object { Write-Host "  $_" }
+    Add-Result "纯逻辑单元测试" ($logicCode -eq 0)
+}
+
+# ── ④ 分池隔离验证 ────────────────────────────────────────────
+$verify = Join-Path $here "verify-pools.py"
+if (Test-Path $verify) {
+    Write-Head "分池隔离验证"
+
+    $env:PYTHONIOENCODING = "utf-8"
+    $verifyOut = & python $verify 2>&1
+    $verifyCode = $LASTEXITCODE
+    $verifyOut | Select-Object -Last 8 | ForEach-Object { Write-Host "  $_" }
+    Add-Result "分池隔离验证" ($verifyCode -eq 0)
+}
+
+# ── ⑤ 界面点击测试 ────────────────────────────────────────────
+if (-not $SkipUi) {
+    Write-Head "界面点击测试"
+
+    # 关键字是 Release 编译的 —— 发布版会校验同目录下的 .lic，
+    # 没有就弹激活窗、主界面不出现，于是每个标签页都找不到（实测踩过）。
+    # 所以先补一份授权文件；实在没有就跳过（不算失败）。
+    $exe = Join-Path $here "bin/Release/net8.0-windows/WorkBuddyPanel.exe"
+    $exeDir = Split-Path $exe -Parent
+    $licTarget = Join-Path $exeDir "license.lic"
+
+    if ((Test-Path $exeDir) -and -not (Test-Path $licTarget)) {
+        foreach ($candidate in @(
+            "D:/BuddyDeck/license.lic",
+            (Join-Path $env:USERPROFILE ".workbuddy-license/license.lic")
+        )) {
+            if (Test-Path $candidate) {
+                Copy-Item $candidate $licTarget -Force
+                Write-Host "  补了授权文件（来自 $candidate）" -ForegroundColor DarkGray
+                break
+            }
+        }
+    }
+
+    if (-not (Test-Path $licTarget)) {
+        Write-Host "  跳过：没有 license.lic，发布版会弹激活窗挡住主界面。" -ForegroundColor Yellow
+        Write-Host "  想跑的话，把一份 .lic 拷到：$exeDir" -ForegroundColor Yellow
+        Add-Result "界面点击测试（跳过：无授权文件）" $true
+    } elseif (-not (Test-Path $exe)) {
+        Write-Host "  跳过：还没编译出 $exe" -ForegroundColor Yellow
+        Add-Result "界面点击测试（跳过：无 exe）" $true
+    } else {
+        # 先关掉已有的开发实例，免得撞单实例锁
+        Get-CimInstance Win32_Process -Filter "Name='WorkBuddyPanel.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.ExecutablePath -like "*bin*Release*" } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Start-Sleep 3
+
+        Start-Process $exe
+        Write-Host "  等程序起来（$StartupWait 秒）…" -ForegroundColor DarkGray
+        Start-Sleep $StartupWait
+
+        $proc = Get-CimInstance Win32_Process -Filter "Name='WorkBuddyPanel.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.ExecutablePath -like "*bin*Release*" } |
+                Select-Object -First 1
+
+        if ($proc) {
+            $uiOut = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here "run-ui-clicktest-all.ps1") -ProcessId $proc.ProcessId 2>&1
+            $uiCode = $LASTEXITCODE
+            $uiOut | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
+            Add-Result "界面点击测试" ($uiCode -eq 0)
+
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-Host "  程序没起来" -ForegroundColor Red
+            Add-Result "界面点击测试" $false
+        }
+    }
+}
+
+# ── 汇总 ──────────────────────────────────────────────────────
+Write-Head "汇总"
+foreach ($r in $results) {
+    $mark = if ($r.Ok) { "OK  " } else { "FAIL" }
+    $color = if ($r.Ok) { "Green" } else { "Red" }
+    Write-Host "  $mark  $($r.Name)" -ForegroundColor $color
+}
+
+Write-Host ""
+if ($failed -eq 0) {
+    Write-Host "全部通过" -ForegroundColor Green
+    exit 0
+}
+Write-Host "$failed 项有问题" -ForegroundColor Red
+exit 1

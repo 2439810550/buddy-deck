@@ -374,130 +374,24 @@ public sealed class PoolManager : IDisposable
     /// <summary>
     /// 把一个号从源池搬到目标池。
     ///
-    /// 不走 export/import：那两个命令是拿**整个保险库**打包加密的
-    /// （一个 AES 块，没法按账号拆），而搬一个号根本不需要过口令。
+    /// 具体逻辑在 <see cref="VaultMover"/> —— 那里是纯文件操作，
+    /// 可以脱离 WPF 直接跑单元测试。这里只负责记一条日志。
     ///
-    /// 保险库本来就是明文 JSON（0600 权限，里面是 accessToken / refreshToken），
-    /// 所以直接读两边文件、搬一条记录、再原子写回 —— 全部是本地文件操作，
-    /// 不可能因为口令不对、导出文件默认文件名之类的意外而失败。
-    ///
-    /// 搬的是原始记录（含 token），不是公共字段 —— 目标池拿到就能直接用，
-    /// 不需要重新登录。token 快过期也没关系，node 加载时会自己刷新。
+    /// 为什么这么做：这段逻辑原本写在这里，而 PoolManager 要 WPF 的
+    /// Dispatcher 才能构造 —— 于是「搬号」一次都没被测过。
+    /// 抽出去之后立刻测出了两个问题：
+    ///   1. 写出去的 JSON 是 PascalCase，读的时候找 camelCase，永远读不回来
+    ///   2. 而且它压根没接到界面上，是死代码
     /// </summary>
-    public Task<string> MoveAccountAsync(
-        PoolConfig from, PoolConfig to, string nodePath, string apiDir,
-        string accountId, CancellationToken ct = default)
+    public string MoveAccount(PoolConfig from, PoolConfig to, string accountId)
     {
-        if (ReferenceEquals(from, to)) throw new InvalidOperationException("源池和目标池是同一个。");
-
-        var srcPath = from.VaultPath();
-        var dstPath = to.VaultPath();
-
-        if (!File.Exists(srcPath))
-            throw new InvalidOperationException($"「{from.DisplayName}」里还没有账号。");
-
-        var src = ReadVault(srcPath);
-        var wanted = accountId.TrimEnd(':');
-
-        var index = src.Accounts.FindIndex(a =>
-            a.TryGetProperty("id", out var idProp) &&
-            idProp.ValueKind == JsonValueKind.String &&
-            (idProp.GetString() ?? "").TrimEnd(':').Equals(wanted, StringComparison.OrdinalIgnoreCase));
-
-        if (index < 0)
-            throw new InvalidOperationException($"在「{from.DisplayName}」里找不到 id 以 {wanted[..Math.Min(8, wanted.Length)]} 开头的账号。");
-
-        var record = src.Accounts[index];
-        src.Accounts.RemoveAt(index);
-
-        // 搬走的是此刻用的那个号 → 取消选定，让源池退回用桌面 App 的登录
-        if (src.ActiveId.TrimEnd(':').Equals(wanted, StringComparison.OrdinalIgnoreCase))
-            src.ActiveId = "";
-
-        // ── 写目标池 ──
-        Directory.CreateDirectory(to.VaultHome());
-        var dst = File.Exists(dstPath)
-            ? ReadVault(dstPath)
-            : new Vault { Version = 1, ActiveId = "", Accounts = new List<JsonElement>() };
-
-        var newId = record.TryGetProperty("id", out var np)
-            ? np.GetString() ?? ""
-            : "";
-
-        // 目标池里已经有同一个号就只更新，不叠一份
-        var existing = dst.Accounts.FindIndex(a =>
-            a.TryGetProperty("id", out var ep) &&
-            ep.ValueKind == JsonValueKind.String &&
-            (ep.GetString() ?? "").Equals(newId, StringComparison.OrdinalIgnoreCase));
-
-        if (existing >= 0) dst.Accounts[existing] = record;
-        else dst.Accounts.Add(record);
-
-        // 目标池里原本没有号（或者没有选中的）→ 默认就用这个
-        if (string.IsNullOrEmpty(dst.ActiveId)) dst.ActiveId = newId;
-
-        WriteVault(dstPath, dst);
-        WriteVault(srcPath, src);
-
-        Log?.Invoke($"[分池] 账号 {newId[..Math.Min(8, newId.Length)]}：{from.DisplayName} → {to.DisplayName}");
-        return Task.FromResult($"已搬到「{to.DisplayName}」");
+        var r = VaultMover.Move(from.VaultPath(), to.VaultPath(), accountId);
+        var shortId = r.AccountId.Length > 8 ? r.AccountId[..8] : r.AccountId;
+        Log?.Invoke($"[分池] 账号 {shortId}：{from.DisplayName} → {to.DisplayName}"
+                    + (r.AlreadyExisted ? "（目标池里已有，已更新）" : ""));
+        return $"已搬到「{to.DisplayName}」";
     }
 
-    // ── 保险库文件的读写 ────────────────────────────────────────
-
-    private sealed class Vault
-    {
-        public int Version { get; set; } = 1;
-        public string ActiveId { get; set; } = "";
-        public List<JsonElement> Accounts { get; set; } = new();
-    }
-
-    private static readonly JsonSerializerOptions VaultJson = new()
-    {
-        WriteIndented = true,
-    };
-
-    private static Vault ReadVault(string path)
-    {
-        var doc = JsonDocument.Parse(File.ReadAllText(path));
-        var root = doc.RootElement;
-
-        var v = new Vault();
-        if (root.TryGetProperty("version", out var ver) && ver.TryGetInt32(out var vi)) v.Version = vi;
-        if (root.TryGetProperty("activeId", out var act) && act.ValueKind == JsonValueKind.String)
-            v.ActiveId = act.GetString() ?? "";
-        if (root.TryGetProperty("accounts", out var accs) && accs.ValueKind == JsonValueKind.Array)
-        {
-            // Clone：JsonDocument 释放后 JsonElement 就失效了，必须先拷一份
-            foreach (var a in accs.EnumerateArray()) v.Accounts.Add(a.Clone());
-        }
-        return v;
-    }
-
-    private static void WriteVault(string path, Vault vault)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var tmp = path + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(vault, VaultJson));
-        File.Move(tmp, path, overwrite: true);
-
-        // 和 node 写这份文件时的权限保持一致：里面有 refreshToken，等同于密码
-        try
-        {
-            var fi = new FileInfo(path);
-            var sec = fi.GetAccessControl();
-            sec.SetAccessRuleProtection(true, false);
-            var me = System.Security.Principal.WindowsIdentity.GetCurrent().User!;
-            sec.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
-                me, System.Security.AccessControl.FileSystemRights.FullControl,
-                System.Security.AccessControl.AccessControlType.Allow));
-            fi.SetAccessControl(sec);
-        }
-        catch
-        {
-            // 设不了 ACL 不影响功能（文件默认仍在用户目录下）
-        }
-    }
 
     public void Dispose()
     {

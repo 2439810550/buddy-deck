@@ -439,7 +439,17 @@ public sealed partial class MainViewModel
         Raise(nameof(ShowBackToDefaultPool));
         _ = RefreshAccountsAsync(fast: true);
         FlashStatus($"正在显示「{pool.DisplayName}」的账号");
+
+        // 光切数据源不够 —— 用户还在分池页上，看不到任何变化，
+        // 会以为按钮坏了。得让窗口把标签页也切过去。
+        //
+        // 用事件而不是直接改 MainTabs：VM 不该知道界面的控件结构
+        // （那样就没法脱离 WPF 测它了）。
+        RequestAccountsTab?.Invoke();
     }
+
+    /// <summary>请求窗口切到「账号」标签页。</summary>
+    public event Action? RequestAccountsTab;
 
     /// <summary>回到默认池的账号列表。</summary>
     public void BackToDefaultPool()

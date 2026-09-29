@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- 引号里的反斜杠要双写 -->
+    <AssemblyName>PoolLogicTests</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    链接真实产品代码，测的就是它 —— 不是照着逻辑重写的复刻版。
+
+    路径说明：本文件在 WorkBuddyPanel\tests\PoolLogic\
+                                     ↑ 往上两层 = WorkBuddyPanel\
+  -->
+  <ItemGroup>
+    <Compile Include="../../Services/VaultMover.cs" />
+    <Compile Include="../../Services/PoolStore.cs" />
+  </ItemGroup>
+
+</Project>

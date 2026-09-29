@@ -68,6 +68,12 @@ public partial class MainWindow : Window
             // 刚切过来先刷一次，不用等一个周期
             if (_onAccountsTab) _ = _vm.RefreshAccountsLightAsync();
         };
+
+        // 分池页点「管理账号」时，把标签页切到账号页。
+        //
+        // 不切的话：数据源确实换了，但用户还站在分池页，看不到任何变化 ——
+        // 会以为按钮坏了（实测就是这个观感）。
+        _vm.RequestAccountsTab += () => MainTabs.SelectedIndex = AccountsTabIndex;
     }
 
     /// <summary>「账号」标签页的下标。加页时跟着调。</summary>

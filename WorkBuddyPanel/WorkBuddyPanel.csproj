@@ -50,6 +50,21 @@
     <None Remove="tools/**" />
     <Page Remove="tools/**" />
     <ApplicationDefinition Remove="tools/**" />
+
+    <!--
+      tests/ 也得排除 —— 那是一个独立的控制台项目（跑单元测试用的）。
+
+      不排除的话，主项目会递归吸进去它 obj/ 里生成的那些 .cs，
+      于是本项目和测试项目各带一份 AssemblyInfo 特性，编译直接挂：
+
+          error CS0579: AssemblyCompanyAttribute 特性重复
+
+      实测踩过：加完测试项目之后，主项目突然编不过。
+    -->
+    <Compile Remove="tests/**" />
+    <None Remove="tests/**" />
+    <Page Remove="tests/**" />
+    <ApplicationDefinition Remove="tests/**" />
   </ItemGroup>
 
 </Project>
