@@ -137,30 +137,39 @@ $handle = $root.Current.NativeWindowHandle
 Write-Host "窗口：$($root.Current.Name)（PID $($root.Current.ProcessId)，句柄 $handle）" -ForegroundColor Cyan
 
 # ── 清掉残留对话框（上次跑崩留下的）─────────────────────────
-$residual = [UiTest]::Dialogs()
-foreach ($d in $residual) {
-    $parts = $d.Split("|")
-    $dh = [IntPtr][int64]$parts[0]
-    Write-Host "  清掉残留对话框：$($parts[1])" -ForegroundColor DarkGray
-    # 先试「取消」（表单类对话框只认这个），再退回 WM_CLOSE
-    $closed = $false
-    try {
-        $de = [System.Windows.Automation.AutomationElement]::FromHandle($dh)
-        $bc = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::Button)
-        foreach ($bb in $de.FindAll([System.Windows.Automation.TreeScope]::Descendants, $bc)) {
-            if ($bb.Current.Name.Trim() -eq "取消") {
-                $bb.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-                $closed = $true
-                break
+# 连清三轮 —— 对话框可能一层套一层（父表单 + 校验提示），
+# 一轮只关得掉最上面那层。实测：只清一轮时，前一个标签页留下的
+# 表单会堆到下一个页签，把 UI 线程堵住，后面的按钮全部点不动。
+$residual = @()
+for ($round = 1; $round -le 3; $round++) {
+    $found = [UiTest]::Dialogs()
+    if ($found.Count -eq 0) { break }
+    $residual += $found
+    foreach ($d in $found) {
+        $parts = $d.Split("|")
+        $dh = [IntPtr][int64]$parts[0]
+        if ($round -eq 1) { Write-Host "  清残留对话框：$($parts[1])" -ForegroundColor DarkGray }
+        $closed = $false
+        try {
+            $de = [System.Windows.Automation.AutomationElement]::FromHandle($dh)
+            $bc = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Button)
+            foreach ($bb in $de.FindAll([System.Windows.Automation.TreeScope]::Descendants, $bc)) {
+                if ($bb.Current.Name.Trim() -eq "取消") {
+                    $bb.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+                    $closed = $true
+                    break
+                }
             }
-        }
-    } catch { }
-    if (-not $closed) { [UiTest]::Close($dh) }
-    Start-Sleep -Milliseconds 400
+        } catch { }
+        if (-not $closed) { [UiTest]::Close($dh) }
+        Start-Sleep -Milliseconds 300
+    }
+    Start-Sleep -Milliseconds 300
 }
-if ($residual.Count -gt 0) { Start-Sleep -Milliseconds 500 }
+
+
 
 # ── 切标签页 ─────────────────────────────────────────────────
 if ($Tab -ne "") {
