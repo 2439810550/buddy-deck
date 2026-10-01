@@ -1,10 +1,13 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using WorkBuddyPanel.Models;
 using WorkBuddyPanel.Services;
 
@@ -89,6 +92,153 @@ public sealed class ChatMessageVm : ObservableObject
     private string _reasoning = "";
     private bool _isStreaming;
 
+    /// <summary>
+    /// 拿来做下载、弹对话框、写状态栏。
+    ///
+    /// 为什么要有：图片的三个按钮（复制/保存/打开）都要下载那个地址、
+    /// 都要能弹文件对话框、都要能把结果写进状态栏 —— 这些能力都在
+    /// 主视图模型上。参照 AccountRowVm 的做法，把 owner 传进来。
+    /// </summary>
+    private readonly MainViewModel? _owner;
+
+    public ChatMessageVm() { }
+
+    public ChatMessageVm(MainViewModel owner) => _owner = owner;
+
+    /// <summary>把图片字节抓下来（带内存缓存，复制/保存/打开共用一次下载）。</summary>
+    private byte[]? _imageBytes;
+
+    /// <summary>
+    /// 图片操作命令。
+    ///
+    /// 刻意**不给 CanExecute 判定** —— 这三个按钮的可见性已经绑在 HasImage 上了
+    /// （没图时整个操作条不显示），再叠一层 CanExecute 只会引入一个经典毛病：
+    /// WPF 只在绑定时问一次 CanExecute，之后属性变了不重新问，
+    /// 结果就是「按钮显示了但一直是灰的」。实测踩过这个坑。
+    ///
+    /// 用 AsyncRelayCommand 是因为它自带「执行期间禁用自己」和错误回调，
+    /// 不用在各处手写 try/catch。
+    /// </summary>
+    public ICommand CopyImageCommand => _copyImage ??= new AsyncRelayCommand(CopyImageAsync, null, ex => _owner?.ReportError(ex));
+    public ICommand SaveImageCommand => _saveImage ??= new AsyncRelayCommand(SaveImageAsync, null, ex => _owner?.ReportError(ex));
+    public ICommand OpenImageCommand => _openImage ??= new AsyncRelayCommand(OpenImageAsync, null, ex => _owner?.ReportError(ex));
+
+    private ICommand? _copyImage;
+    private ICommand? _saveImage;
+    private ICommand? _openImage;
+
+    /// <summary>
+    /// 下载图片。三个操作共用 —— 点「复制」再点「保存」不会下载两遍。
+    ///
+    /// 地址来自网关，是带签名的本地地址（不依赖上游那个 1 小时失效的链接）。
+    /// </summary>
+    private async Task<byte[]?> FetchImageAsync()
+    {
+        if (_imageBytes is not null) return _imageBytes;
+        if (!HasImage) return null;
+
+        try
+        {
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            var bytes = await http.GetByteArrayAsync(ImageUrl).ConfigureAwait(true);
+            _imageBytes = bytes;
+            return bytes;
+        }
+        catch (Exception ex)
+        {
+            _owner?.ReportError(ex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 复制图片到剪贴板。
+    ///
+    /// 为什么要单独做：WPF 的 Image 控件**不响应 Ctrl+C**，也没有默认右键菜单。
+    /// 以前界面上写着「右键可保存到本地」是假的 —— 用户发现图根本复制不了。
+    ///
+    /// 剪贴板里同时放 PNG 和 Bitmap 两种格式：
+    ///   · PNG  → 粘进 Word / 微信 / 浏览器 都能用
+    ///   · Bitmap → 粘进画图 / 一些老程序才认
+    /// </summary>
+    private async Task CopyImageAsync()
+    {
+        var bytes = await FetchImageAsync();
+        if (bytes is null) return;
+
+        try
+        {
+            var bitmap = new BitmapImage();
+            using (var stream = new MemoryStream(bytes))
+            {
+                bitmap.BeginInit();
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;  // 拷完就断开流，别锁文件
+                bitmap.StreamSource = stream;
+                bitmap.EndInit();
+                bitmap.Freeze();                                 // 冻结后才能跨线程用
+            }
+
+            var data = new DataObject();
+            data.SetImage(bitmap);
+            // 再塞一份原始 PNG 字节 —— 有些程序只认这个格式
+            data.SetData("PNG", new MemoryStream(bytes));
+
+            Clipboard.SetDataObject(data, copy: true);
+            _owner?.SetStatus("图片已复制到剪贴板");
+        }
+        catch (Exception ex)
+        {
+            _owner?.ReportError(ex);
+        }
+    }
+
+    private async Task SaveImageAsync()
+    {
+        var bytes = await FetchImageAsync();
+        if (bytes is null) return;
+
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "保存图片",
+            FileName = $"workbuddy-{Time:yyyyMMdd-HHmmss}.png",
+            Filter = "PNG 图片|*.png|所有文件|*.*",
+            DefaultExt = ".png",
+        };
+        if (dialog.ShowDialog() != true) return;
+
+        try
+        {
+            await File.WriteAllBytesAsync(dialog.FileName, bytes);
+            _owner?.SetStatus($"图片已保存到 {dialog.FileName}");
+        }
+        catch (Exception ex)
+        {
+            _owner?.ReportError(ex);
+        }
+    }
+
+    /// <summary>用系统默认看图程序打开。临时文件放独立目录，避免每次落一地。</summary>
+    private async Task OpenImageAsync()
+    {
+        var bytes = await FetchImageAsync();
+        if (bytes is null) return;
+
+        try
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "WorkBuddyPanel");
+            Directory.CreateDirectory(dir);
+            var file = Path.Combine(dir, $"image-{Time:yyyyMMdd-HHmmss}.png");
+            await File.WriteAllBytesAsync(file, bytes);
+
+            Process.Start(new ProcessStartInfo(file) { UseShellExecute = true });
+            _owner?.SetStatus("已用系统看图程序打开");
+        }
+        catch (Exception ex)
+        {
+            _owner?.ReportError(ex);
+        }
+    }
+
     public bool IsUser { get; init; }
     public string RoleLabel => IsUser ? "我" : "WorkBuddy";
     public DateTime Time { get; } = DateTime.Now;
@@ -102,7 +252,55 @@ public sealed class ChatMessageVm : ObservableObject
             if (Set(ref _text, value))
             {
                 Raise(nameof(HasText));
+                Raise(nameof(ImageUrl));
+                Raise(nameof(HasImage));
+                Raise(nameof(TextWithoutImage));
             }
+        }
+    }
+
+    /// <summary>
+    /// 从回复里找出生成图片的地址。
+    ///
+    /// 为什么需要：画图那条路返回的是 markdown
+    ///
+    ///     已生成图片：![生成结果](http://127.0.0.1:8787/v1/images/file/xxx.png?s=...)
+    ///
+    /// 而对话气泡里的正文是个 TextBox（纯文本），markdown 不会渲染 ——
+    /// 用户看到的就是那串原始字符，得手动复制地址才能在浏览器里打开。
+    /// 实测就有人问「这生成的图片去哪了」。
+    ///
+    /// 所以把地址抠出来，界面上直接显示图片。
+    /// </summary>
+    public string ImageUrl
+    {
+        get
+        {
+            if (IsUser) return "";
+            var m = System.Text.RegularExpressions.Regex.Match(
+                _text, @"!\[[^\]]*\]\((http[^\s\)]+)");
+            return m.Success ? m.Groups[1].Value : "";
+        }
+    }
+
+    public bool HasImage => ImageUrl.Length > 0;
+
+    /// <summary>
+    /// 去掉图片那两行之后的文字。
+    ///
+    /// 图片已经用真的 Image 控件显示了，再把这串 markdown 和裸地址
+    /// 原样摆一遍是重复信息。
+    /// </summary>
+    public string TextWithoutImage
+    {
+        get
+        {
+            if (!HasImage) return _text;
+            var lines = _text.Split('\n')
+                .Where(l => !l.Contains("!["))
+                .Where(l => !l.TrimStart().StartsWith("地址："))
+                .ToList();
+            return string.Join("\n", lines).Trim();
         }
     }
 
@@ -520,7 +718,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>常驻状态：不会被自动清掉（错误、当前配置这类）。</summary>
-    private void SetStatus(string message)
+    internal void SetStatus(string message)
     {
         _statusTimer.Stop();
         StatusIsTransient = false;
@@ -1060,6 +1258,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 // 网关是真的在跑，两边得说同一句话。
                 BaseUrl = $"http://127.0.0.1:{port}/v1";
                 AdoptGatewayIntoDefaultPool(externalRunning: true, externalUrl: BaseUrl);
+
+                // ⚠ 必须重建聊天客户端。
+                //
+                // 以前漏了这一步，后果很隐蔽：
+                //   ① 点「停止网关」→ StopGateway() 把 _chat 清成 null
+                //   ② 再点「启动网关」→ 端口上那个 node 其实没死（成了孤儿），
+                //      于是走这条「采用」路径
+                //   ③ 采用只设了 IsGatewayRunning = true，_chat 还是 null
+                //   ④ 界面：发送按钮是亮的（CanSend 只看 IsGatewayRunning）
+                //      实际：SendAsync 第一行 `if (_chat is null) return` 静默返回
+                //   → 用户看到的就是「发送按钮失效了，点了没反应」
+                _chat?.Dispose();
+                _chat = new ChatStreamClient(BaseUrl, ApiKey);
+
                 return;
             }
 
@@ -1454,7 +1666,30 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task SendAsync()
     {
-        if (_chat is null || SelectedModel is null) return;
+        // 前置条件不满足时**要说出来**，不能静默返回。
+        //
+        // 以前是 `if (_chat is null) return;` —— 什么也不做也不报错。
+        // 配合另一个 bug（采用已有网关时没重建 _chat），表现就成了
+        // 「发送按钮亮着但点了没反应」，而且日志里一个字都没有，
+        // 根本无从下手查。
+        //
+        // 现在：告诉用户为什么没发出去。
+        if (_chat is null)
+        {
+            SetStatus(IsGatewayRunning
+                ? "聊天连接没建好 —— 请点一下「停止网关」再「启动网关」"
+                : "网关没在跑，先在首页启动它");
+            AppendLog("[发送] 被拦下：聊天客户端未建立（_chat 为空）");
+            return;
+        }
+
+        if (SelectedModel is null)
+        {
+            SetStatus("还没选模型，在下面那个下拉框里选一个");
+            AppendLog("[发送] 被拦下：没选模型");
+            return;
+        }
+
         var prompt = Input.Trim();
         if (prompt.Length == 0) return;
 
@@ -1466,11 +1701,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         history.Add(new ChatTurn("user", prompt));
 
-        Messages.Add(new ChatMessageVm { IsUser = true, Text = prompt });
+        Messages.Add(new ChatMessageVm(this) { IsUser = true, Text = prompt });
         Input = "";
         Raise(nameof(HasMessages));
 
-        var answer = new ChatMessageVm { IsUser = false, IsStreaming = true };
+        var answer = new ChatMessageVm(this) { IsUser = false, IsStreaming = true };
         Messages.Add(answer);
         Raise(nameof(HasMessages));
 

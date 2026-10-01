@@ -1351,11 +1351,53 @@
                                                                                         MaxHeight="320" />
                                                                                     </Expander>
 
-                                                                                    <TextBox Text="{Binding Text, Mode=OneWay}" IsReadOnly="True"
+                                                                                    <TextBox Text="{Binding TextWithoutImage, Mode=OneWay}" IsReadOnly="True"
                                                                                     TextWrapping="Wrap" Background="Transparent" BorderThickness="0"
                                                                                     Padding="0"
                                                                                     FontSize="14" Foreground="{StaticResource TextMain}"
-                                                                                    VerticalScrollBarVisibility="Disabled" IsTabStop="False" />
+                                                                                    VerticalScrollBarVisibility="Disabled" IsTabStop="False"
+                                                                                    Visibility="{Binding HasText, Converter={StaticResource BoolToVis}}" />
+
+                                                                                    <!--
+                                                                                        生成的图片。
+
+                                                                                        以前只把 markdown 文字摆在那里，用户得自己
+                                                                                        复制地址去浏览器打开 —— 实测有人问「图去哪了」。
+                                                                                        现在直接渲染出来。
+
+                                                                                        MaxWidth 限制住，不然 1024px 的图会把气泡撑爆。
+                                                                                    -->
+                                                                                    <Image Source="{Binding ImageUrl, Mode=OneWay}"
+                                                                                           MaxWidth="420" MaxHeight="420"
+                                                                                           Stretch="Uniform" StretchDirection="DownOnly"
+                                                                                           HorizontalAlignment="Left"
+                                                                                           Margin="0,6,0,0"
+                                                                                           Visibility="{Binding HasImage, Converter={StaticResource BoolToVis}}" />
+
+                                                                                    <!--
+                                                                                        图片操作条。
+
+                                                                                        以前这里只写了句「右键可保存到本地」——
+                                                                                        而 WPF 的 Image 控件默认**没有**右键菜单，
+                                                                                        也不会响应 Ctrl+C。用户发现图根本没法复制。
+
+                                                                                        现在给真的按钮：
+                                                                                          · 复制图片  → 拷到剪贴板，能粘进微信/Word
+                                                                                          · 保存        → 另存为文件
+                                                                                          · 打开        → 用系统看图程序打开
+                                                                                    -->
+                                                                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0"
+                                                                                                Visibility="{Binding HasImage, Converter={StaticResource BoolToVis}}">
+                                                                                        <Button Content="复制图片" FontSize="11.5" Padding="8,3"
+                                                                                                Style="{StaticResource GhostButton}"
+                                                                                                Command="{Binding CopyImageCommand}" />
+                                                                                        <Button Content="保存到…" FontSize="11.5" Padding="8,3" Margin="6,0,0,0"
+                                                                                                Style="{StaticResource GhostButton}"
+                                                                                                Command="{Binding SaveImageCommand}" />
+                                                                                        <Button Content="用系统看图打开" FontSize="11.5" Padding="8,3" Margin="6,0,0,0"
+                                                                                                Style="{StaticResource GhostButton}"
+                                                                                                Command="{Binding OpenImageCommand}" />
+                                                                                    </StackPanel>
 
                                                                                     <TextBlock Text="{Binding Error}" Foreground="{StaticResource Bad}"
                                                                                         FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"

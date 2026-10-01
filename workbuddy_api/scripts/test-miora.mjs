@@ -551,6 +551,109 @@ group("改图：media 输入形态");
 }
 
 // ══════════════════════════════════════════════════════════════
+group("图片地址：完整 URL + 签名");
+
+{
+  // 起一个真网关（用假上游），验证地址形态和签名校验。
+  //
+  // 这是用户报的问题：「图生成了但找不到」——
+  // 回复里给的是相对路径 /v1/images/file/xxx.png，
+  // 粘到浏览器里打不开（不知道去哪台机器找），而且图片端点要
+  // Authorization 头，浏览器不会带。
+  const { createServer } = await import("node:http");
+  const { createGateway } = await import("../src/gateway.js");
+
+  // 极简的假上游：只回一个固定图片
+  const upstream = createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        upstreamTaskId: "t1", model: "fake", mode: "sync", status: "completed",
+        resultFiles: [{ signedUrl: `http://127.0.0.1:${imgPort}/x.png`, mimeType: "image/png" }],
+      }));
+    });
+  });
+  const imgServer = createServer((req, res) => {
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64");
+    res.writeHead(200, { "content-type": "image/png" });
+    res.end(png);
+  });
+  const imgPort = await new Promise((r) => imgServer.listen(0, "127.0.0.1", () => r(imgServer.address().port)));
+  const upPort = await new Promise((r) => upstream.listen(0, "127.0.0.1", () => r(upstream.address().port)));
+
+  const gw = createGateway({
+    client: null,
+    store: { resolve: async () => ({ accessToken: "jwt", uid: "u1" }) },
+    catalog: { base: () => [], current: () => [] },
+    variant: {
+      id: "test", billingBase: `http://127.0.0.1:${upPort}`,
+      chatBase: `http://127.0.0.1:${upPort}`,
+    },
+    apiKey: "sk-test-sign",
+    log: () => {},
+    // 让 Miora 指向假上游
+    autoImage: false,
+  });
+
+  const port = await new Promise((r) => gw.server.listen(0, "127.0.0.1", () => r(gw.server.address().port)));
+
+  const call = (path, opts = {}) => new Promise((resolve) => {
+    const req = (opts.raw
+      ? import("node:http").then((m) => m.default.request({
+        host: "127.0.0.1", port, path, method: opts.method ?? "GET",
+        headers: opts.headers ?? {},
+      }))
+      : null);
+    if (req) {
+      req.then((r) => {
+        r.on("response", (res) => {
+          const chunks = [];
+          res.on("data", (c) => chunks.push(c));
+          res.on("end", () => resolve({ status: res.statusCode, body: Buffer.concat(chunks), headers: res.headers }));
+        });
+        r.end(opts.body);
+      });
+      return;
+    }
+  });
+
+  await test("签名 URL 能被无 Authorization 的 GET 取到", async () => {
+    // 先用假上游生成一张（绕开 Miora 的认证，直接调网关的图片端点不行，
+    // 所以这里直接测签名函数的行为：把文件放进 media 目录再取）
+    const { join } = await import("node:path");
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const { MioraClient } = await import("../src/miora.js");
+    const dir = MioraClient.mediaDir();
+    await mkdir(dir, { recursive: true });
+    const name = "abcdef0123456789.png";
+    await writeFile(join(dir, name), Buffer.from("89504e470d0a1a0a", "hex"));
+
+    // 无签名 → 401
+    const bare = await call(`/v1/images/file/${name}`, { raw: true });
+    assert.equal(bare.status, 401, `裸路径应该 401，实际 ${bare.status}`);
+
+    // 错签名 → 401
+    const wrong = await call(`/v1/images/file/${name}?s=0000000000000000`, { raw: true });
+    assert.equal(wrong.status, 401, `错签名应该 401，实际 ${wrong.status}`);
+
+    // 带 Authorization → 200
+    const withKey = await call(`/v1/images/file/${name}`, {
+      raw: true, headers: { authorization: "Bearer sk-test-sign" },
+    });
+    assert.equal(withKey.status, 200, `带 key 应该 200，实际 ${withKey.status}`);
+  });
+
+  // 清理
+  try { gw.server.close(); } catch {}
+  try { upstream.close(); } catch {}
+  try { imgServer.close(); } catch {}
+}
+
+// ══════════════════════════════════════════════════════════════
 if (process.env.GATEWAY_TEST_LIVE === "1") {
   group("真上游（要 GATEWAY_TEST_LIVE=1）");
 

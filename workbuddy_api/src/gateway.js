@@ -31,6 +31,7 @@ import {
 } from "./upstream.js";
 import { beginSse, createModelResolver } from "./protocol.js";
 import { RateLimitTracker, describeRateLimit, isRateLimited, pickFallbackModel } from "./ratelimit.js";
+import { createHmac } from "node:crypto";
 import { MioraClient, MioraError } from "./miora.js";
 import { detectImageIntent, buildImagePrompt } from "./image-intent.js";
 import * as anthropic from "./anthropic.js";
@@ -290,6 +291,40 @@ async function readJsonBody(req) {
  * @param {(...args: any[]) => void} [options.log]
  * @returns {{server: import("node:http").Server, listen: (port: number, host: string) => Promise<{port: number, host: string}>, close: () => Promise<void>}}
  */
+
+/**
+ * 给生成的文件名算个签名。
+ *
+ * 为什么要签名：图片端点如果要求 `Authorization` 头，用户把地址复制到
+ * 浏览器里就打不开（浏览器不会带那个头）—— 实测就是这个体验：
+ * 「图生成了，但找不到」。
+ *
+ * 但也不能完全敞开：那样任何人猜到文件名就能遍历。
+ *
+ * 所以把 API key 当 HMAC 密钥，给文件名签个名放进 URL：
+ *
+ *     /v1/images/file/<name>?s=<签名>
+ *
+ *   · 从 API 拿到 URL 的人（也就是有 key 的人）能直接打开
+ *   · 不知道 key 的人签不出来，遍历不了
+ *   · 同一个文件签名固定 → 浏览器/CDN 缓存友好
+ *
+ * apiKey 为空（网关没开鉴权）时返回空串，这时也不校验。
+ */
+function signName(name, apiKey) {
+  if (apiKey === "") return "";
+  return createHmac("sha256", apiKey).update(name).digest("hex").slice(0, 16);
+}
+
+/** 常量时间比较，避免时序侧信道。长度不同直接 false。 */
+function signatureMatches(expected, presented) {
+  if (typeof presented !== "string" || expected === "") return false;
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(presented, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
 export function createGateway(options) {
   const { client, store, catalog, variant } = options;
   const apiKey = options.apiKey ?? "";
@@ -330,6 +365,27 @@ export function createGateway(options) {
   // 面板，不需要这层拦截；也方便排查「为什么我的聊天被吞了」。
   const autoImage = options.autoImage !== false
     && process.env.WORKBUDDY_AUTO_IMAGE !== "0";
+
+  /**
+   * 把生成的文件名变成**完整可用**的 URL。
+   *
+   * 两件事：
+   *   ① 补上 host —— 以前只给 `/v1/images/file/xxx.png`，
+   *      用户粘到浏览器里打不开（不知道去哪台机器找）
+   *   ② 带上签名 —— 否则要 Authorization 头，浏览器不会带
+   *
+   * host 从进来的请求里取。这样反向代理（new-api 之类）转发过来时，
+   * 返回的也是代理那侧的地址，客户端照样能用。
+   *
+   * @param {import("node:http").IncomingMessage} req
+   * @param {string} file 文件名（内容哈希.扩展名）
+   */
+  function imageUrl(req, file) {
+    const host = req.headers.host ?? `127.0.0.1:${variant.port ?? 8787}`;
+    const signature = signName(file, apiKey);
+    const query = signature === "" ? "" : `?s=${signature}`;
+    return `http://${host}/v1/images/file/${file}${query}`;
+  }
 
   /**
    * 发一次上游请求；被限流就**换模型重试**。
@@ -393,7 +449,9 @@ export function createGateway(options) {
   });
 
   async function handle(req, res) {
-    const url = (req.url ?? "/").split("?")[0];
+    // 原始 URL（含查询串）—— 图片签名在 ?s= 里，不能把查询串切掉
+    const rawUrl = req.url ?? "/";
+    const url = rawUrl.split("?")[0];
 
     if (req.method === "GET" && (url === "/healthz" || url === "/healthz/")) {
       writeJson(res, 200, { ok: true, provider: variant.id, models: catalog.base().length });
@@ -408,7 +466,20 @@ export function createGateway(options) {
       return;
     }
 
-    if (apiKey !== "") {
+    // 图片端点允许用 URL 签名代替 Authorization 头。
+    //
+    // 为什么：用户在浏览器里直接打开图片时不会带那个头 ——
+    // 不特殊处理的话他看到的是 401，而不是图。
+    // 签名是用 API key 作为 HMAC 密钥算出来的，所以「能拿出有效签名」
+    // 等价于「知道 key」。安全性不降低，但可用性天壤之别。
+    const isSignedImageRequest = req.method === "GET"
+      && url.startsWith("/v1/images/file/")
+      && signatureMatches(
+        signName(url.slice("/v1/images/file/".length), apiKey),
+        new URL(rawUrl, "http://localhost").searchParams.get("s"),
+      );
+
+    if (apiKey !== "" && !isSignedImageRequest) {
       const presented = bearerOf(req);
       if (presented === undefined || !keyMatches(apiKey, presented)) {
         res.setHeader("WWW-Authenticate", 'Bearer realm="workbuddy-api"');
@@ -497,8 +568,9 @@ export function createGateway(options) {
     //
     // 为什么不让客户端直接用上游的签名 URL：那个 URL 1 小时失效，
     // 客户端如果存下来晚点再看就打不开了。这里中转一层，永久可用。
+    // 注意：要放在 API key 校验**之前**处理签名 —— 见下面的说明。
     if (req.method === "GET" && url.startsWith("/v1/images/file/")) {
-      await serveGeneratedFile(req, res, url.slice("/v1/images/file/".length));
+      await serveGeneratedFile(req, res, url.slice("/v1/images/file/".length), rawUrl);
       return;
     }
 
@@ -731,7 +803,7 @@ export function createGateway(options) {
       log(`[video] 生成完成，耗时 ${Math.round((Date.now() - started) / 1000)}s`);
       writeJson(res, 200, {
         created: Math.floor(Date.now() / 1000),
-        data: [{ url: `/v1/images/file/${media.file}` }],
+        data: [{ url: imageUrl(req, media.file) }],
         model: result.model,
       });
     } catch (error) {
@@ -769,7 +841,7 @@ export function createGateway(options) {
         const url = files[0].signedUrl ?? files[0].url;
         if (typeof url === "string" && url !== "") {
           const media = await miora.download(url);
-          payload.data = [{ url: `/v1/images/file/${media.file}` }];
+          payload.data = [{ url: imageUrl(req, media.file) }];
         }
       }
 
@@ -865,7 +937,7 @@ export function createGateway(options) {
             const buffer = await readFile(join(MioraClient.mediaDir(), media.file));
             return { b64_json: buffer.toString("base64") };
           }
-          return { url: `/v1/images/file/${media.file}` };
+          return { url: imageUrl(req, media.file) };
         }),
       );
 
@@ -950,7 +1022,7 @@ export function createGateway(options) {
             const buffer = await readFile(join(MioraClient.mediaDir(), m.file));
             return { b64_json: buffer.toString("base64") };
           }
-          return { url: `/v1/images/file/${m.file}` };
+          return { url: imageUrl(req, m.file) };
         }),
       );
 
@@ -965,7 +1037,7 @@ export function createGateway(options) {
   }
 
   /** GET /v1/images/file/<name> —— 把网关存下来的生成结果发回去。 */
-  async function serveGeneratedFile(req, res, name) {
+  async function serveGeneratedFile(req, res, name, rawUrl) {
     // 只允许「哈希.扩展名」这种名字 —— 防止有人用 ../ 读别的文件
     if (!/^[a-f0-9]{8,64}\.(png|jpg|jpeg|webp|mp4)$/i.test(name)) {
       writeOpenAIError(res, 400, "invalid_request_error", "文件名不合法");
@@ -1055,7 +1127,7 @@ export function createGateway(options) {
    * @returns {Promise<boolean>} true = 已经处理完了（响应已发出），
    *                            false = 没成功，调用方该走正常聊天
    */
-  async function tryAutoImage(res, request, intent, wantsStream, credential) {
+  async function tryAutoImage(req, res, request, intent, wantsStream, credential) {
     const prompt = buildImagePrompt(intent.prompt);
     if (prompt === "") return false;
 
@@ -1067,7 +1139,7 @@ export function createGateway(options) {
       if (result.files.length === 0) return false;
 
       const media = await miora.download(result.files[0].url);
-      const url = `/v1/images/file/${media.file}`;
+      const url = imageUrl(req, media.file);
       const model = String(request["model"] ?? "");
       const id = `chatcmpl-img-${Date.now().toString(36)}`;
 
@@ -1162,7 +1234,7 @@ export function createGateway(options) {
     if (autoImage && !hasImageContent(request) && !hasToolUse(request)) {
       const intent = detectImageIntent(lastUserText(request));
       if (intent.wants) {
-        const handled = await tryAutoImage(res, request, intent, wantsStream, credential);
+        const handled = await tryAutoImage(req, res, request, intent, wantsStream, credential);
         if (handled) return;
         // 生图失败就往下走正常聊天流程 —— 让模型回句话，
         // 总比给用户一个生硬的错误强。
