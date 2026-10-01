@@ -1089,9 +1089,15 @@ export function createGateway(options) {
   }
 
 
-  // ── 自动画图的辅助函数 ──────────────────────────────────────
+  // ── 媒体工具相关的辅助函数 ──────────────────────────────
 
-  /** 请求里有没有图片输入（有的话说明用户在讨论图，不是在要新图）。 */
+  /**
+   * 请求里有没有图片输入。
+   *
+   * 为什么要看这个：用户传了图问「这是什么」，模型不该去调
+   * `workbuddy_generate_image` 重新画一张 —— 那是在讨论已有素材，
+   * 不是要新图。所以带图片输入的请求不注入媒体工具。
+   */
   function hasImageContent(request) {
     const messages = Array.isArray(request.messages) ? request.messages : [];
     return messages.some((m) => {
@@ -1103,33 +1109,6 @@ export function createGateway(options) {
       }
       return false;
     });
-  }
-
-  /** 请求里带工具了就不插手 —— 那是 agent 在干活，不该被截胡。 */
-  function hasToolUse(request) {
-    return Array.isArray(request.tools) && request.tools.length > 0;
-  }
-
-  /**
-   * 最后一条 user 消息的纯文本。
-   *
-   * 只看最后一条 —— 历史里出现过的「画」不代表现在要画。
-   */
-  function lastUserText(request) {
-    const messages = Array.isArray(request.messages) ? request.messages : [];
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const m = messages[i];
-      if (!m || typeof m !== "object" || m.role !== "user") continue;
-      if (typeof m.content === "string") return m.content;
-      if (Array.isArray(m.content)) {
-        return m.content
-          .filter((p) => p && typeof p === "object" && p.type === "text")
-          .map((p) => String(p.text ?? ""))
-          .join("\n");
-      }
-      return "";
-    }
-    return "";
   }
 
   async function chatCompletions(req, res) {
