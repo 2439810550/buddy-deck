@@ -109,7 +109,7 @@ src/anthropic.js   Anthropic Messages ←→ Chat（含 tool_use 双向、count_
 src/responses.js   OpenAI Responses ←→ Chat（含 output item 的事件流顺序）
 ```
 
-## 画图（OpenAI 图片接口）
+## 画图端点（OpenAI 图片接口）
 
 网关不只转发聊天 —— **还能画图**。
 
@@ -181,17 +181,84 @@ GET /v1/images/file/<hash>.png                客户端随时来取
 代码在 `src/miora.js`。临时凭据有缓存（同一个账号复用，切号自动重取，
 上游说失效会自动重取一次）。
 
-### 为什么聊天模型不会自己画
+## 聊天里直接生图 / 生视频（工具调用）
 
-问它「画一只猫」，它会回你一段提示词 —— 那是**正常的**：
+**跟模型说「画一只猫」就会出图**，不用调上面那个端点。
+
+而且 —— **外接的客户端也一样能用**。Claude Code、pi、DSH、
+任何走 OpenAI 协议的客户端，接上这个网关就能生图。
+
+### 怎么做的
+
+第一版这里写的是**关键词匹配**：命中「画」「生成」就去生图。两个死穴：
+
+* **死板**。「生成一个视频」命中「生成」，被当成生图处理 ——
+  用户要视频拿到一张图。补词表只能修一个个案，修不了面。
+* **一接外挂客户端就废**。那段代码前面有个 `!hasToolUse(request)` 判断 ——
+  一看客户端带了 tools 就跳过关键词。于是 Claude Code 里说「画一只猫」，
+  模型只会回「我没办法直接画图哦」。
+
+现在照 **WorkBuddy 自己的做法**（挖 `app.asar` 里那个 `miora-mcp` 插件看出来的）：
+把生成能力做成**工具**注册给模型，**模型自己判断**该不该调、调哪个。
 
 ```
-聊天模型看到的是消息，看不到生图工具。
-生图工具（miora_text_to_image 等 8 个）走另一条 MCP 通道，
-只在桌面 App 自己的会话里挂着。
+客户端发请求
+  ↓ 网关注入 4 个工具（客户端没自带同名工具时）
+     workbuddy_generate_image      文生图
+     workbuddy_edit_image          改图 / 图生图
+     workbuddy_generate_video      文生视频
+     workbuddy_image_to_video      图生视频（可带尾帧）
+  ↓ 模型回 tool_calls
+  ↓ **网关自己执行**（只有网关拿着 Miora 的凭证）
+  ↓ 结果作为 role:"tool" 消息回填
+  ↓ 带新对话再问一次模型
+  ↓ 模型给出带图片 markdown 的最终答复
+客户端拿到的就是一次普通的聊天回复
 ```
 
-所以画图要用上面那个独立端点 —— 这也是 OpenAI 的做法（Chat 和 Images 分开）。
+**为什么必须网关执行**：Claude Code 不认识 `workbuddy_generate_image`，
+交给它也没用。这条只有网关能走。
+
+### 几个关键取舍
+
+**流式下先缓冲再决定。** 模型可能先说「好的我来画」**然后**才发 tool_calls。
+等看到 tool_calls 时那半句已经写给客户端了，而客户端已经把前半句渲染出来了，
+后面的工具结果插不进去。所以网关**先攒着不急着往外写**：攒够 40 个字符
+或流结束才放行；这期间发现是调我们的工具就整轮丢掉，只给最终的干净答复。
+
+**工具执行期间保活。** 生图要 10~30 秒，一个字节都不发。有些客户端有 30 秒
+空闲超时。所以执行期间每 10 秒发一个 SSE 注释行（`: keepalive`）。
+
+**客户端的工具原样交回。** 只有 `workbuddy_` 前缀的工具网关执行。
+客户端自己的（`Read` / `Bash` / `get_weather`）原样返回，让它自己跑 ——
+标准 OpenAI 流程。*（踩过：非流式路径一开始没做这个区分，客户端调
+`get_weather` 结果模型收到「未知工具」，回了一句「天气工具好像不可用」，
+用户看到一切正常，只是永远查不出数据。）*
+
+**视频提交就走。** 图片等 10~30 秒没问题，视频要几分钟，等下去客户端早超时了。
+所以视频工具返回 taskId + 查询地址，让模型转告用户。
+
+### 关掉
+
+想让它老老实实当个纯聊天网关：
+
+```bash
+WORKBUDDY_MEDIA_TOOLS=0
+```
+
+### 实测
+
+```
+scripts/test-agent.mjs         117 项协议测试（假上游，零成本、可重复）
+scripts/test-tool-intent.mjs   真的问模型「要不要调工具」（会生图，花钱）
+
+  node scripts/test-tool-intent.mjs          免费用例 + 2 条生图
+  node scripts/test-tool-intent.mjs --all    全跑（8 条生图）
+  node scripts/test-tool-intent.mjs --video  再加视频（慢）
+```
+
+意图测试里「不该调」的用例占多数 —— 它们才是防误判的关键。
+**漏判只是用户再说一次，误判会白花额度还答非所问。**
 
 ### 生成的文件放哪
 
@@ -456,6 +523,7 @@ node src/bin.js config --set authFile="D:\path\to\workbuddy-desktop.info"
 | `WORKBUDDY_AUTH_FILE` | 国内版 App 登录文件的显式路径 |
 | `WORKBUDDY_AI_AUTH_FILE` | 国际版 App 登录文件的显式路径 |
 | `WORKBUDDY_ELECTRON_BIN` | App 5.6+ 加密凭据的 key helper 二进制（探测不到时指定） |
+| `WORKBUDDY_MEDIA_TOOLS` | 设 `0` 关掉聊天里的生图/生视频工具（变回纯聊天网关） |
 
 登录文件的默认探测位置（按顺序）：
 
@@ -646,6 +714,17 @@ WORKBUDDY_ELECTRON_BIN="D:\sqsoftware\workbuddy\WorkBuddy.exe" node src/bin.js d
 - **企业账号计费未实测**——开发机为个人账号。
 - **`status` 在加密凭据下不显示昵称**——5.6+ 把 `nickname` 也加密了，本工具
   只解密发请求必需的 token 字段，不解密个人信息。
+- **生图/生视频依赖模型判断该不该调工具**——不像关键词匹配那样确定。
+  实测 14 条常见说法全对（含 12 条「不该调」的），但模型判断本身有波动。
+  测法见 `scripts/test-tool-intent.mjs`。漏判只是用户再说一次；误判会白花
+  额度，所以工具的 description 里写了大量排除条款。
+- **混合同轮调用时只认一边**——如果模型在同一轮里既调我们的生图工具、
+  又调客户端的工具（`Read` / `Bash` 之类），网关只执行我们那个，其余
+  给一条说明性回复。因为网关没法替客户端执行本地工具，而客户端不认识
+  我们的工具。实际很少见，遇到会在日志里记一条。
+- **流式首字节有延迟**——为了处理「先说话后调工具」，网关要缓冲约 40
+  个字符才放行。正常聊天感觉不到（模型很快超过 40 字），但极短的回复
+  会晚一点出现。
 
 ---
 

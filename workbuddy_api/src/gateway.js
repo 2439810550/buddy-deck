@@ -33,7 +33,8 @@ import { beginSse, createModelResolver } from "./protocol.js";
 import { RateLimitTracker, describeRateLimit, isRateLimited, pickFallbackModel } from "./ratelimit.js";
 import { createHmac } from "node:crypto";
 import { MioraClient, MioraError } from "./miora.js";
-import { detectImageIntent, buildImagePrompt } from "./image-intent.js";
+import { injectMediaTools, mediaTools } from "./media-tools.js";
+import { runAgentNonStreaming, runAgentStreaming } from "./agent.js";
 import * as anthropic from "./anthropic.js";
 import * as responses from "./responses.js";
 import { recordUsage } from "./usage.js";
@@ -357,14 +358,24 @@ export function createGateway(options) {
   // 真正的状态永远以上游为准。
   const videoTasks = new Map();
 
-  // 聊天里自动画图。
+  // 生图 / 生视频能力，作为**工具**注册给模型。
   //
-  // 用户说「画一只猫」→ 直接调生图，把图作为回复返回，跳过聊天模型。
+  // ── 为什么不是关键词匹配 ──────────────────────────────
   //
-  // 默认开。要关掉设 WORKBUDDY_AUTO_IMAGE=0 —— 有些客户端自己有画图
-  // 面板，不需要这层拦截；也方便排查「为什么我的聊天被吞了」。
-  const autoImage = options.autoImage !== false
-    && process.env.WORKBUDDY_AUTO_IMAGE !== "0";
+  // 第一版是关键词：命中「画」「生成」就去生图。两个死穴：
+  //
+  //   ① 死板。「生成一个视频」命中「生成」→ 当生图处理，
+  //      用户要视频拿到图。补词表只能修一个个案。
+  //   ② 一接外挂客户端就废。那段代码前面有 !hasToolUse ——
+  //      一看客户端带了 tools 就跳过关键词。于是 Claude Code /
+  //      pi / DSH 里说「画一只猫」，模型只会回「我没办法直接画图」。
+  //
+  // 现在照 WorkBuddy 自己的做法（挖 app.asar 里那个 miora-mcp 插件）：
+  // 把工具注册给模型，**模型自己判断**该不该调、调哪个。
+  //
+  // 默认开。要关掉设 WORKBUDDY_MEDIA_TOOLS=0。
+  const mediaToolsEnabled = options.mediaTools !== false
+    && process.env.WORKBUDDY_MEDIA_TOOLS !== "0";
 
   /**
    * 把生成的文件名变成**完整可用**的 URL。
@@ -1121,84 +1132,6 @@ export function createGateway(options) {
     return "";
   }
 
-  /**
-   * 试着把「画图请求」直接变成图片。
-   *
-   * @returns {Promise<boolean>} true = 已经处理完了（响应已发出），
-   *                            false = 没成功，调用方该走正常聊天
-   */
-  async function tryAutoImage(req, res, request, intent, wantsStream, credential) {
-    const prompt = buildImagePrompt(intent.prompt);
-    if (prompt === "") return false;
-
-    const startedImg = Date.now();
-    try {
-      log(`[auto-image] 识别到画图请求：「${prompt.slice(0, 50)}」（${intent.reason}）`);
-
-      const result = await miora.submit("image", "generate", { prompt });
-      if (result.files.length === 0) return false;
-
-      const media = await miora.download(result.files[0].url);
-      const url = imageUrl(req, media.file);
-      const model = String(request["model"] ?? "");
-      const id = `chatcmpl-img-${Date.now().toString(36)}`;
-
-      // 回复文案：说清楚「这是生成的图」，并把地址给出来。
-      //
-      // 为什么要给 URL：OpenAI 的 chat 响应里没有图片字段，
-      // 只能靠文字或 markdown。多数客户端会把 markdown 图片渲染出来。
-      const text = `已生成图片：![生成结果](${url})\n\n地址：${url}`;
-
-      log(`[auto-image] 完成，耗时 ${Date.now() - startedImg}ms，模型 ${result.model}`);
-
-      if (!wantsStream) {
-        writeJson(res, 200, {
-          id,
-          object: "chat.completion",
-          created: Math.floor(Date.now() / 1000),
-          model,
-          choices: [{
-            index: 0,
-            message: { role: "assistant", content: text },
-            finish_reason: "stop",
-          }],
-          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-        });
-      } else {
-        res.writeHead(200, {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-          "X-Accel-Buffering": "no",
-        });
-        res.flushHeaders?.();
-        const chunk = (delta, finish = null) => JSON.stringify({
-          id, object: "chat.completion.chunk",
-          created: Math.floor(Date.now() / 1000),
-          model,
-          choices: [{ index: 0, delta, finish_reason: finish }],
-        });
-        res.write(`data: ${chunk({ role: "assistant" })}\n\n`);
-        res.write(`data: ${chunk({ content: text })}\n\n`);
-        res.write(`data: ${chunk({}, "stop")}\n\n`);
-        res.write("data: [DONE]\n\n");
-        res.end();
-      }
-
-      void recordUsage({
-        model: String(request["model"] ?? ""), usedModel: result.model,
-        kind: "image", account: accountTag(credential),
-        usage: undefined, outcome: "ok", attempts: 1,
-        elapsedMs: Date.now() - startedImg,
-      });
-
-      return true;
-    } catch (error) {
-      log(`[auto-image] 失败：${error?.message ?? error}`);
-      return false;
-    }
-  }
-
   async function chatCompletions(req, res) {
     const parsed = await readJsonBody(req);
     if (!parsed.ok) {
@@ -1223,27 +1156,25 @@ export function createGateway(options) {
     const requestedModel = String(request["model"] ?? "");
     const startedAt = Date.now();
 
-    // ── 自动画图 ──────────────────────────────────────────────
+    const resolvedModel = resolveModel(request["model"]);
+
+    // ── 把生图 / 生视频注册成工具 ──────────────────────────
     //
-    // 聊天模型看不见生图工具（那是桌面 App 会话里的另一条通道），
-    // 所以用户说「画一只猫」它只会回一段提示词。这里提前拦一下：
-    // 识别出是在要图就直接调生图，把图作为回复。
+    // 客户端没自带同名工具时才注入（不抢客户端的实现）。
+    // Claude Code / pi / DSH 本来就没有这些工具 —— 正好补上。
     //
-    // 判定规则在 image-intent.js，写得**故意保守** ——
-    // 漏判无害（用户再说一次），误判要花一次生图额度。
-    if (autoImage && !hasImageContent(request) && !hasToolUse(request)) {
-      const intent = detectImageIntent(lastUserText(request));
-      if (intent.wants) {
-        const handled = await tryAutoImage(req, res, request, intent, wantsStream, credential);
-        if (handled) return;
-        // 生图失败就往下走正常聊天流程 —— 让模型回句话，
-        // 总比给用户一个生硬的错误强。
-        log(`[auto-image] 生图没成功，回退到聊天（${intent.prompt.slice(0, 40)}）`);
+    // request 是 readJsonBody 现解析出来的，每请求一份，直接改安全。
+    const injected = [];
+    if (mediaToolsEnabled && !hasImageContent(request)) {
+      const info = injectMediaTools(request);
+      injected.push(...info.injected);
+      if (injected.length > 0) {
+        log(`[agent] 注入 ${injected.length} 个媒体工具：${injected.join(", ")}`);
       }
     }
 
-    const resolvedModel = resolveModel(request["model"]);
-    const { result, model: usedModel, attempts } = await sendWithFallback({
+    // 一轮发送。agent 循环要用同一个入口，所以包成函数。
+    const sendRound = () => sendWithFallback({
       credential,
       request,
       model: resolvedModel.model,
@@ -1252,7 +1183,9 @@ export function createGateway(options) {
       tag: "",
     });
 
-    if (!result.ok) {
+    /** 把 agent 循环里的失败变成客户端能读的错误。 */
+    const failWith = (round) => {
+      const { result, attempts } = round;
       log(`upstream ${result.kind} (http ${result.status}) 试过：${attempts.join(" → ") || "-"}`);
       const extra = attempts.length > 1 ? `（已试过 ${attempts.join(" → ")}）` : "";
       writeOpenAIError(
@@ -1261,24 +1194,45 @@ export function createGateway(options) {
         result.kind,
         `workbuddy upstream ${result.kind} (http ${result.status}): ${result.message.slice(0, 400)}${extra}`,
       );
-      return;
-    }
+    };
 
+    const agentCtx = {
+      request,
+      miora,
+      makeUrl: (file) => imageUrl(req, file),
+      log,
+      trackVideoTask: (taskId, model) => videoTasks.set(taskId, { createdAt: Date.now(), model: model ?? "" }),
+    };
+
+    const logRound = ({ round, calls, results }) => {
+      log(`[agent] 第 ${round} 轮执行 ${calls.length} 个工具：`
+        + calls.map((c, k) => `${c.function?.name}=${results[k]?.ok ? "ok" : "fail"}`).join(", "));
+    };
+
+    // ── 非流式 ────────────────────────────────────────────
     if (!wantsStream) {
-      const completion = await collectChatCompletion(result.response);
+      const outcome = await runAgentNonStreaming({ ...agentCtx, send: sendRound, onRound: logRound });
+
+      if (outcome.error !== undefined) {
+        failWith(outcome.error);
+        return;
+      }
+
+      const completion = outcome.completion;
       // 换过模型时，把响应的 model 字段改成实际用的那个
-      if (typeof completion === "object" && completion !== null && usedModel !== undefined) {
-        completion["model"] = usedModel;
+      if (typeof completion === "object" && completion !== null) {
+        completion["model"] = resolvedModel.model;
       }
       writeJson(res, 200, completion);
       void recordUsage({
-        model: requestedModel, usedModel, kind: "chat", account: accountTag(credential),
-        usage: completion?.["usage"], outcome: "ok", attempts: attempts.length,
+        model: requestedModel, usedModel: resolvedModel.model, kind: "chat", account: accountTag(credential),
+        usage: completion?.["usage"], outcome: "ok", attempts: 1,
         elapsedMs: Date.now() - startedAt,
       });
       return;
     }
 
+    // ── 流式 ──────────────────────────────────────────────
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -1287,21 +1241,50 @@ export function createGateway(options) {
     });
     res.flushHeaders?.();
 
+    // 写一个 delta 分片。过 sanitizeChunk（洗掉上游那些会骗到严格客户端的
+    // 字段）和 renameChunkModel（换过模型时改名字）。
+    const writeChunk = (chunk) => {
+      if (res.writableEnded) return;
+      const payload = JSON.stringify(chunk);
+      captureUsage(payload);
+      const sanitized = sanitizeChunk(renameChunkModel(payload, resolvedModel.model));
+      if (sanitized === undefined) return;
+      res.write(`data: ${sanitized}\n\n`);
+    };
+
+    // 工具执行期间保活。SSE 注释行，客户端按规范会忽略。
+    const writeKeepalive = () => {
+      if (res.writableEnded) return;
+      res.write(": keepalive\n\n");
+    };
+
     try {
-      for await (const payload of iterateSseData(result.response.body)) {
-        if (payload === "[DONE]") {
-          res.write("data: [DONE]\n\n");
-          break;
+      const outcome = await runAgentStreaming({
+        ...agentCtx,
+        send: sendRound,
+        emit: writeChunk,
+        keepalive: writeKeepalive,
+        onRound: logRound,
+      });
+
+      if (outcome.error !== undefined) {
+        log(`[agent] 流中断：${outcome.error.result?.kind ?? "?"}`);
+        if (!res.writableEnded) {
+          // 头已经发出去了，不能改状态码 —— 用 SSE 事件报错
+          const shaped = {
+            error: {
+              message: `workbuddy upstream ${outcome.error.result?.kind ?? "error"}`,
+              type: outcome.error.result?.kind ?? "upstream_error",
+            },
+          };
+          res.write(`data: ${JSON.stringify(shaped)}\n\n`);
         }
-        // 记账要的 usage（含上游的 credit）在 sanitize 丢掉之前先抠一份
-        captureUsage(payload);
-        const sanitized = sanitizeChunk(renameChunkModel(payload, usedModel));
-        if (sanitized === undefined) continue;
-        res.write(`data: ${sanitized}\n\n`);
       }
+
+      if (!res.writableEnded) res.write("data: [DONE]\n\n");
       void recordUsage({
-        model: requestedModel, usedModel, kind: "chat", account: accountTag(credential),
-        usage: lastUsage, outcome: "ok", attempts: attempts.length,
+        model: requestedModel, usedModel: resolvedModel.model, kind: "chat", account: accountTag(credential),
+        usage: lastUsage, outcome: outcome.error === undefined ? "ok" : "failed", attempts: 1,
         elapsedMs: Date.now() - startedAt,
       });
       lastUsage = null;
@@ -1312,8 +1295,8 @@ export function createGateway(options) {
         res.write("data: [DONE]\n\n");
       }
       void recordUsage({
-        model: requestedModel, usedModel, kind: "chat", account: accountTag(credential),
-        usage: lastUsage, outcome: "failed", attempts: attempts.length,
+        model: requestedModel, usedModel: resolvedModel.model, kind: "chat", account: accountTag(credential),
+        usage: lastUsage, outcome: "failed", attempts: 1,
         elapsedMs: Date.now() - startedAt,
       });
       lastUsage = null;
