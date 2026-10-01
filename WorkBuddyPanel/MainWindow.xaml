@@ -1367,7 +1367,7 @@
 
                                                                                         MaxWidth 限制住，不然 1024px 的图会把气泡撑爆。
                                                                                     -->
-                                                                                    <Image Source="{Binding ImageUrl, Mode=OneWay}"
+                                                                                    <Image Source="{Binding EffectiveImageUrl, Mode=OneWay}"
                                                                                            MaxWidth="420" MaxHeight="420"
                                                                                            Stretch="Uniform" StretchDirection="DownOnly"
                                                                                            HorizontalAlignment="Left"
@@ -1398,6 +1398,33 @@
                                                                                                 Style="{StaticResource GhostButton}"
                                                                                                 Command="{Binding OpenImageCommand}" />
                                                                                     </StackPanel>
+
+                                                                                    <!--
+                                                                                        视频任务。
+
+                                                                                        视频要几分钟渲染，网关提交完就返回一个任务 id，
+                                                                                        让模型转告用户。用户看到的就是一段文字 —— 没有任何
+                                                                                        可点的东西，只能自己拼地址去浏览器查。
+
+                                                                                        这里把它变成两个按钮：查一次进度、完成后播放。
+                                                                                        不做自动轮询 —— 视频要几分钟，自动轮询要么让界面
+                                                                                        等半天，要么写个后台定时器一直开火。让用户点一下
+                                                                                        更简单也更可控，他知道自己在等什么。
+                                                                                    -->
+                                                                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0"
+                                                                                                Visibility="{Binding HasVideoTask, Converter={StaticResource BoolToVis}}">
+                                                                                        <Button Content="查询进度" FontSize="11.5" Padding="8,3"
+                                                                                                Style="{StaticResource GhostButton}"
+                                                                                                Command="{Binding CheckVideoCommand}" />
+                                                                                        <Button Content="播放视频" FontSize="11.5" Padding="8,3" Margin="6,0,0,0"
+                                                                                                Style="{StaticResource GhostButton}"
+                                                                                                Visibility="{Binding HasVideo, Converter={StaticResource BoolToVis}}"
+                                                                                                Command="{Binding OpenVideoCommand}" />
+                                                                                    </StackPanel>
+
+                                                                                    <TextBlock Text="{Binding VideoNote}" FontSize="11.5" Margin="0,4,0,0"
+                                                                                        Foreground="{StaticResource TextSub}" TextWrapping="Wrap"
+                                                                                        Visibility="{Binding HasVideoNote, Converter={StaticResource BoolToVis}}" />
 
                                                                                     <TextBlock Text="{Binding Error}" Foreground="{StaticResource Bad}"
                                                                                         FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"

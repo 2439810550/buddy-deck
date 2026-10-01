@@ -253,8 +253,11 @@ public sealed class ChatMessageVm : ObservableObject
             {
                 Raise(nameof(HasText));
                 Raise(nameof(ImageUrl));
+                Raise(nameof(EffectiveImageUrl));
                 Raise(nameof(HasImage));
                 Raise(nameof(TextWithoutImage));
+                Raise(nameof(VideoStatusPath));
+                Raise(nameof(HasVideoTask));
             }
         }
     }
@@ -283,7 +286,188 @@ public sealed class ChatMessageVm : ObservableObject
         }
     }
 
-    public bool HasImage => ImageUrl.Length > 0;
+    /// <summary>
+    /// 图片地址**只在真的能用**时才有值。
+    ///
+    /// 为什么要多一层判断（踩过一个很贵的坑）：
+    ///
+    /// 一开始写的是 `ImageUrl` 抓到什么就返回什么。视频回复里没有图片，
+    /// 返回空串 —— 看着没问题，`Visibility` 也该把它藏起来。
+    ///
+    /// 但 WPF 的绑定**同时求值**：`Source=""` 照样会喂给
+    /// `ImageSourceConverter`，转换器对空串抛异常，异常又触发 `Measure`
+    /// 重排，重排又走到那个绑定…… **栈溢出，进程直接死**
+    /// （事件日志 `0xc00000fd`，dump 里能看到
+    /// ImageSourceConverter.ConvertFrom ↔ BindingExpression.TransferValue
+    /// 来回递归）。
+    ///
+    /// 所以：不能给 Image 控件任何它转换不了的值。空串也不行。
+    /// </summary>
+    public string EffectiveImageUrl
+    {
+        get
+        {
+            var url = ImageUrl;
+            if (url.Length == 0) return "";
+            // Image.Source 认 http/https/file 绝对路径；相对路径也能认，
+            // 但网关给的是完整 URL，这里只放行明确能解析的
+            return url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase)
+                ? url
+                : "";
+        }
+    }
+
+    public bool HasImage => EffectiveImageUrl.Length > 0;
+
+    /// <summary>
+    /// 这条回复里有没有**视频任务**（网关提交后就返回，不是成品）。
+    ///
+    /// 为什么单独处理：视频要几分钟渲染，网关提交完就返回一个任务 id
+    /// 和查询地址，让模型转告用户。用户看到的就是一段文字 —— 没有
+    /// 任何可点的东西，只能自己拼地址去浏览器查。
+    ///
+    /// 这里把它抠出来，界面上给个「查询进度」按钮。
+    /// 地址形如 /v1/video/status/wb-xxxx
+    /// </summary>
+    public string VideoStatusPath
+    {
+        get
+        {
+            if (IsUser) return "";
+            var m = System.Text.RegularExpressions.Regex.Match(_text, @"/v1/video/status/([A-Za-z0-9_\-]+)");
+            return m.Success ? m.Value : "";
+        }
+    }
+
+    public bool HasVideoTask => VideoStatusPath.Length > 0;
+
+    public ICommand CheckVideoCommand => _checkVideo ??= new AsyncRelayCommand(CheckVideoAsync, null, ex => _owner?.ReportError(ex));
+    private ICommand? _checkVideo;
+
+    /// <summary>
+    /// 查一次视频任务。
+    ///
+    /// 为什么不自动轮询：视频要几分钟，自动轮询要么让界面等半天，
+    /// 要么写个后台定时器一直开火。让用户点一下更简单也更可控 ——
+    /// 他知道自己在等什么。
+    /// </summary>
+    private async Task CheckVideoAsync()
+    {
+        if (!HasVideoTask || _owner is null) return;
+
+        try
+        {
+            _owner.SetStatus("正在查询视频进度…");
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+            var url = $"{_owner.BaseUrl.TrimEnd('/')}{VideoStatusPath.Replace("/v1", "")}";
+            // BaseUrl 已经是 http://host:port/v1，所以路径要去掉 /v1 前缀
+            url = _owner.BaseUrl.TrimEnd('/') + VideoStatusPath.Substring("/v1".Length);
+
+            using var req = new System.Net.Http.HttpRequestMessage(HttpMethod.Get, url);
+            if (_owner.ApiKey.Length > 0)
+                req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {_owner.ApiKey}");
+
+            using var resp = await http.SendAsync(req).ConfigureAwait(true);
+            var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(true);
+
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var status = root.TryGetProperty("status", out var st) ? st.GetString() ?? "?" : "?";
+
+            if (status is "completed" && root.TryGetProperty("data", out var data)
+                && data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0)
+            {
+                var videoUrl = data[0].TryGetProperty("url", out var u) ? u.GetString() : null;
+                if (videoUrl is { Length: > 0 })
+                {
+                    VideoUrl = videoUrl;
+                    Raise(nameof(VideoUrl));
+                    Raise(nameof(HasVideo));
+                    _owner.SetStatus("视频生成完成");
+                    return;
+                }
+            }
+
+            if (status is "failed" or "error")
+            {
+                var msg = root.TryGetProperty("error", out var e) && e.TryGetProperty("message", out var em)
+                    ? em.GetString() : null;
+                VideoNote = $"视频生成失败：{msg ?? "上游没有说明原因"}";
+                Raise(nameof(VideoNote));
+                _owner.SetStatus("视频生成失败");
+                return;
+            }
+
+            VideoNote = status switch
+            {
+                "pending" or "submitted" => "还在排队…",
+                "processing" or "running" => "正在渲染…",
+                _ => $"状态：{status}",
+            };
+            Raise(nameof(VideoNote));
+            _owner.SetStatus($"视频{VideoNote}");
+        }
+        catch (Exception ex)
+        {
+            _owner.ReportError(ex);
+        }
+    }
+
+    public ICommand OpenVideoCommand => _openVideo ??= new AsyncRelayCommand(OpenVideoAsync, null, ex => _owner?.ReportError(ex));
+    private ICommand? _openVideo;
+
+    /// <summary>
+    /// 打开生成的视频。
+    ///
+    /// 和图片一样先下载到本地再开 —— 网关的地址是带签名的完整 URL，
+    /// 但直接丢给系统播放器有时会因为没带请求头发起失败。下载到
+    /// 临时文件最稳。
+    /// </summary>
+    private async Task OpenVideoAsync()
+    {
+        if (!HasVideo || _owner is null) return;
+
+        try
+        {
+            _owner.SetStatus("正在下载视频…");
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(3) };
+            var bytes = await http.GetByteArrayAsync(VideoUrl).ConfigureAwait(true);
+
+            var dir = Path.Combine(Path.GetTempPath(), "WorkBuddyPanel");
+            Directory.CreateDirectory(dir);
+            var file = Path.Combine(dir, $"video-{Time:yyyyMMdd-HHmmss}.mp4");
+            await File.WriteAllBytesAsync(file, bytes).ConfigureAwait(true);
+
+            Process.Start(new ProcessStartInfo(file) { UseShellExecute = true });
+            _owner.SetStatus("已用系统播放器打开视频");
+        }
+        catch (Exception ex)
+        {
+            _owner.ReportError(ex);
+        }
+    }
+
+    /// <summary>视频好了之后的地址。</summary>
+    private string _videoUrl = "";
+    public string VideoUrl
+    {
+        get => _videoUrl;
+        set { if (Set(ref _videoUrl, value)) { Raise(nameof(HasVideo)); } }
+    }
+    public bool HasVideo => VideoUrl.Length > 0;
+
+    /// <summary>查询过程中的提示（「还在排队…」之类）。</summary>
+    private string _videoNote = "";
+    public string VideoNote
+    {
+        get => _videoNote;
+        set { if (Set(ref _videoNote, value)) Raise(nameof(HasVideoNote)); }
+    }
+    public bool HasVideoNote => VideoNote.Length > 0;
 
     /// <summary>
     /// 去掉图片那两行之后的文字。
