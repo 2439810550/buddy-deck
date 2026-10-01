@@ -73,6 +73,21 @@ const TEMPKEY_REFRESH_MARGIN_MS = 60_000; // 提前 1 分钟
 const SUBMIT_TIMEOUT_MS = 180_000;
 const MISC_TIMEOUT_MS = 30_000;
 
+/**
+ * 轮询超时。
+ *
+ * 图片和视频差很多 —— App 源码里的值是：
+ *   图片  POLL_TIMEOUT_MS = 90 秒
+ *   视频  VIDEO_POLL_TIMEOUT_MS = 15 分钟
+ *
+ * 视频慢得多（要渲染几百帧），用图片那个超时会让它必然失败。
+ */
+const IMAGE_POLL_TIMEOUT_MS = 90_000;
+const VIDEO_POLL_TIMEOUT_MS = 15 * 60_000;
+
+/** 轮询间隔。App 里图片 2.5 秒、视频 3 秒 —— 都取 3 秒。 */
+const POLL_INTERVAL_MS = 3_000;
+
 /** 下载生成的图片时的超时。 */
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 
@@ -176,39 +191,114 @@ export class MioraClient {
    *
    * 上游有两种模式：
    *   · `sync`  —— 提交时就带着结果回来（生图通常是这样，实测）
-   *   · `async` —— 只给任务 id，要轮询
+   *   · `async` —— 只给任务 id，要轮询（视频通常是这种）
    *
    * 这里统一处理：sync 直接用返回结果，async 才轮询。
    *
-   * @param {"image"|"video"} kind
+   * @param {"image"|"video"} kind 图片还是视频。两者的轮询超时差很多。
    * @param {"generate"|"edit"|undefined} action image 才有 edit
    * @param {object} body
    * @param {object} [options]
-   * @param {number} [options.pollTimeoutMs]
+   * @param {number} [options.pollTimeoutMs] 覆盖默认轮询超时
    */
   async submit(kind, action, body, options = {}) {
-    const path = this.#submitPath(kind, action);
     const queryPath = `${MIORA_API_BASE}/${kind}/query-task`;
 
-    const first = await this.#postWithAuth(path, body, SUBMIT_TIMEOUT_MS);
-    const data = first?.data ?? first;
+    const submitted = await this.#postWithAuth(
+      this.#submitPath(kind, action),
+      body,
+      SUBMIT_TIMEOUT_MS,
+    );
+    const data = submitted?.data ?? submitted;
 
     const taskId = data?.upstreamTaskId;
     if (typeof taskId !== "string" || taskId === "") {
       throw new MioraError(
         "UPSTREAM_ERROR",
-        `上游没返回任务 id：${JSON.stringify(first).slice(0, 300)}`,
+        `上游没返回任务 id：${JSON.stringify(submitted).slice(0, 300)}`,
       );
     }
 
-    // sync：提交即完成，不用再问
+    // sync：提交即完成，不用再问。
+    //
+    // 这里也看 failed —— 同步模式可能带着失败回来。
+    // 那种情况不抛异常，走 normalize（里面带 errorMessage），
+    // 让调用方看到「任务跑了但没出图」，而不是一个笼统的异常。
     if (data.mode === "sync" || data.status === "completed" || data.status === "failed") {
       return this.#normalize(data, taskId);
     }
 
-    // async：轮询到终态
-    const entry = await this.#poll(queryPath, taskId, options.pollTimeoutMs ?? SUBMIT_TIMEOUT_MS);
+    // async：轮询到终态。视频默认给 15 分钟，图片 90 秒。
+    const defaultTimeout = kind === "video" ? VIDEO_POLL_TIMEOUT_MS : IMAGE_POLL_TIMEOUT_MS;
+    const entry = await this.#poll(
+      queryPath,
+      taskId,
+      options.pollTimeoutMs ?? defaultTimeout,
+      kind,
+    );
     return this.#normalize({ ...entry, upstreamTaskId: taskId }, taskId);
+  }
+
+  /**
+   * 只提交、不等待 —— 拿到任务 id 就返回。
+   *
+   * 为什么需要它：**视频太慢了**（几分钟到十几分钟）。
+   * 「提交就走 + 客户端轮询」比把 HTTP 连接挂在那儿好得多：
+   *   · 客户端的超时设置通常撑不住十几分钟
+   *   · 网关重启一下连接就断了，任务白跑
+   *
+   * @returns {Promise<{upstreamTaskId: string, status?: string, model?: string, mode?: string}>}
+   */
+  async submitRaw(kind, body) {
+    const payload = await this.#postWithAuth(
+      this.#submitPath(kind, undefined),
+      body,
+      SUBMIT_TIMEOUT_MS,
+    );
+    const data = payload?.data ?? payload;
+
+    const taskId = data?.upstreamTaskId;
+    if (typeof taskId !== "string" || taskId === "") {
+      throw new MioraError(
+        "UPSTREAM_ERROR",
+        `上游没返回任务 id：${JSON.stringify(payload).slice(0, 300)}`,
+      );
+    }
+
+    return {
+      upstreamTaskId: taskId,
+      status: data.status ?? "pending",
+      model: data.model ?? "",
+      provider: data.provider ?? "",
+      mode: data.mode ?? "async",
+    };
+  }
+
+  /**
+   * 查一个任务的状态，**不轮询、不下载**。
+   *
+   * 给 /v1/video/status/<id> 那种「客户端自己问」的场景用。
+   *
+   * @returns {Promise<object>} 上游的 task 对象（含 status / resultFiles）
+   */
+  async query(kind, taskId) {
+    const queryPath = `${MIORA_API_BASE}/${kind}/query-task`;
+    const payload = await this.#postWithAuth(
+      queryPath,
+      { upstreamTaskIds: [taskId] },
+      MISC_TIMEOUT_MS,
+    );
+
+    const data = payload?.data ?? payload;
+
+    // 上游的返回结构有两种（实测都见过）：
+    //   · data 直接是那个 task 对象
+    //   · data 是 { "<taskId>": {...} } 的映射
+    // query-task 用的是后者。
+    if (Array.isArray(data)) return data[0];
+    if (Array.isArray(data?.tasks)) return data.tasks[0];
+    if (data && typeof data === "object" && data[taskId]) return data[taskId];
+    return data;
   }
 
   /**
@@ -318,14 +408,13 @@ export class MioraClient {
     throw new MioraError("AUTH_TEMPKEY_FAILED", "重新获取临时凭据后仍然失败");
   }
 
-  async #poll(queryPath, taskId, timeoutMs) {
-    const interval = 2500;
+  async #poll(queryPath, taskId, timeoutMs, kind = "image") {
     const deadline = Date.now() + timeoutMs;
     let attempt = 0;
 
     while (Date.now() < deadline) {
       attempt += 1;
-      await new Promise((resolve) => setTimeout(resolve, interval));
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 
       let payload;
       try {
@@ -335,23 +424,40 @@ export class MioraClient {
           MISC_TIMEOUT_MS,
         );
       } catch (error) {
+        // 单次查询失败不致命（网络抖一下很正常）—— 接着轮，别放弃整个任务
         this.log(`[miora] 轮询第 ${attempt} 次失败：${error.message}`);
         continue;
       }
 
       const data = payload?.data ?? payload;
-      const entry = Array.isArray(data) ? data[0]
-        : Array.isArray(data?.tasks) ? data.tasks[0]
-        : data;
+
+      // 上游的返回结构有两种（实测都见过）：
+      //   · data 直接是那个 task 对象
+      //   · data 是 { "<taskId>": {...} } 的映射
+      // 前者是 submit 的风格，后者是 query-task 的风格。
+      let entry;
+      if (Array.isArray(data)) {
+        entry = data[0];
+      } else if (Array.isArray(data?.tasks)) {
+        entry = data.tasks[0];
+      } else if (data && typeof data === "object" && data[taskId]) {
+        entry = data[taskId];
+      } else {
+        entry = data;
+      }
 
       const status = entry?.status;
+      this.log(`[miora] ${kind} 轮询第 ${attempt} 次：${status ?? "未知状态"}`);
+
       if (status === "completed" || status === "failed" || status === "cancelled") {
         return entry;
       }
-      this.log(`[miora] 轮询第 ${attempt} 次：${status ?? "未知状态"}`);
     }
 
-    throw new MioraError("TIMEOUT", `等待生成超时（${Math.round(timeoutMs / 1000)} 秒）`);
+    throw new MioraError(
+      "TIMEOUT",
+      `等待${kind === "video" ? "视频" : "图片"}生成超时（${Math.round(timeoutMs / 1000)} 秒）`,
+    );
   }
 
   #normalize(data, taskId) {

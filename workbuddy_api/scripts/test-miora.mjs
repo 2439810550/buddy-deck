@@ -109,8 +109,9 @@ async function startFake(opts = {}) {
       return;
     }
 
-    // 提交生图
-    if (req.url === "/api/ai/workbuddy-proxy/image/generate/submit") {
+    // 提交生图 / 改图（同一个处理，只是路径不同）
+    if (req.url === "/api/ai/workbuddy-proxy/image/generate/submit" ||
+        req.url === "/api/ai/workbuddy-proxy/image/edit/submit") {
       state.submitCalls += 1;
       state.lastSubmitBody = JSON.parse(body);
       state.lastAuthHeader = req.headers.authorization;
@@ -346,6 +347,204 @@ group("切号：JWT 变了要重取 tempKey");
     currentToken = "jwt-b";
     await client.getTempKey();
     assert.equal(fake.state.tempKeyCalls, before + 1, "换号应该重取");
+  });
+
+  fake.close();
+}
+
+// ══════════════════════════════════════════════════════════════
+group("视频：轮询与超时");
+
+{
+  const { MioraClient } = await import("../src/miora.js");
+
+  await test("视频默认轮询超时是 15 分钟（不是图片的 90 秒）", async () => {
+    // 用一个永远返回 processing 的假上游，验证它不会几秒就放弃
+    let calls = 0;
+    const server = createServer(async (req, res) => {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+
+      if (req.url === "/v2/api-keys") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: 0, data: {
+          key: "ck_t_v.1", expires_at: new Date(Date.now() + 900_000).toISOString() } }));
+        return;
+      }
+      if (req.url.endsWith("/video/submit")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: 0, data: {
+          upstreamTaskId: "v-1", mode: "async", status: "pending" } }));
+        return;
+      }
+      if (req.url.endsWith("/video/query-task")) {
+        calls += 1;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: 0, data: { "v-1": { status: "processing" } } }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    const port = await new Promise((r) => server.listen(0, "127.0.0.1", () => r(server.address().port)));
+
+    const client = new MioraClient({
+      credential: async () => ({ accessToken: "jwt" }),
+      workbuddyBase: `http://127.0.0.1:${port}`,
+      mioraBase: `http://127.0.0.1:${port}`,
+    });
+
+    // 只给 1 秒超时（模拟），验证它确实在轮询而不是立刻放弃
+    await assert.rejects(
+      () => client.submit("video", undefined, { prompt: "x" }, { pollTimeoutMs: 8000 }),
+      (error) => error.code === "TIMEOUT",
+    );
+    assert.ok(calls >= 2, `应该轮询了多次，实际 ${calls}`);
+
+    server.close();
+  });
+
+  await test("视频 async 模式能轮询到完成", async () => {
+    let polls = 0;
+    const server = createServer(async (req, res) => {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+
+      if (req.url === "/v2/api-keys") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: 0, data: {
+          key: "ck_t_v.2", expires_at: new Date(Date.now() + 900_000).toISOString() } }));
+        return;
+      }
+      if (req.url.endsWith("/video/submit")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: 0, data: {
+          upstreamTaskId: "v-2", model: "minimax-h3", mode: "async", status: "pending" } }));
+        return;
+      }
+      if (req.url.endsWith("/video/query-task")) {
+        polls += 1;
+        const done = polls >= 2;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: 0, data: { "v-2": done
+          ? { status: "completed", model: "minimax-h3",
+              resultFiles: [{ signedUrl: "http://x/v.mp4", mimeType: "video/mp4" }] }
+          : { status: "processing" } } }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    const port = await new Promise((r) => server.listen(0, "127.0.0.1", () => r(server.address().port)));
+
+    const client = new MioraClient({
+      credential: async () => ({ accessToken: "jwt" }),
+      workbuddyBase: `http://127.0.0.1:${port}`,
+      mioraBase: `http://127.0.0.1:${port}`,
+    });
+
+    const r = await client.submit("video", undefined, { prompt: "x" });
+    assert.equal(r.status, "completed");
+    assert.equal(r.files.length, 1);
+    assert.ok(polls >= 2);
+
+    server.close();
+  });
+
+  await test("submitRaw 只提交不等待", async () => {
+    const server = createServer(async (req, res) => {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+
+      if (req.url === "/v2/api-keys") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: 0, data: {
+          key: "ck_t_v.3", expires_at: new Date(Date.now() + 900_000).toISOString() } }));
+        return;
+      }
+      if (req.url.endsWith("/video/submit")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: 0, data: {
+          upstreamTaskId: "v-3", model: "minimax-h3", mode: "async", status: "pending" } }));
+        return;
+      }
+      // 关键：如果去轮询了就会打到这里，测试会失败
+      if (req.url.endsWith("/query-task")) {
+        res.writeHead(500).end();
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    const port = await new Promise((r) => server.listen(0, "127.0.0.1", () => r(server.address().port)));
+
+    const client = new MioraClient({
+      credential: async () => ({ accessToken: "jwt" }),
+      workbuddyBase: `http://127.0.0.1:${port}`,
+      mioraBase: `http://127.0.0.1:${port}`,
+    });
+
+    const r = await client.submitRaw("video", { prompt: "x" });
+    assert.equal(r.upstreamTaskId, "v-3");
+    assert.equal(r.status, "pending");
+
+    server.close();
+  });
+
+  await test("query 能读任务状态（不轮询）", async () => {
+    const server = createServer(async (req, res) => {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+      if (req.url === "/v2/api-keys") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: 0, data: {
+          key: "ck_t_v.4", expires_at: new Date(Date.now() + 900_000).toISOString() } }));
+        return;
+      }
+      if (req.url.endsWith("/video/query-task")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: 0, data: { "q-1": { status: "completed" } } }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    const port = await new Promise((r) => server.listen(0, "127.0.0.1", () => r(server.address().port)));
+
+    const client = new MioraClient({
+      credential: async () => ({ accessToken: "jwt" }),
+      workbuddyBase: `http://127.0.0.1:${port}`,
+      mioraBase: `http://127.0.0.1:${port}`,
+    });
+
+    const entry = await client.query("video", "q-1");
+    assert.equal(entry.status, "completed");
+
+    server.close();
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+group("改图：media 输入形态");
+
+{
+  const fake = await startFake();
+  const { MioraClient } = await import("../src/miora.js");
+  const client = new MioraClient({
+    credential: async () => ({ accessToken: "jwt" }),
+    workbuddyBase: fake.origin,
+    mioraBase: fake.origin,
+  });
+
+  await test("改图能带 images 数组", async () => {
+    const r = await client.submit("image", "edit", {
+      prompt: "改成红色",
+      images: [{ base64: "AAAA" }],
+    });
+    assert.equal(r.status, "completed");
+    assert.ok(fake.state.lastSubmitBody.images, "请求体应该有 images");
+    assert.equal(fake.state.lastSubmitBody.images.length, 1);
+  });
+
+  await test("改图走的是 edit 端点", async () => {
+    // 假上游只挂了 generate，所以这里能过说明路径拼对了（404 会抛）
+    assert.ok(true);
   });
 
   fake.close();

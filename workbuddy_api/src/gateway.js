@@ -32,6 +32,7 @@ import {
 import { beginSse, createModelResolver } from "./protocol.js";
 import { RateLimitTracker, describeRateLimit, isRateLimited, pickFallbackModel } from "./ratelimit.js";
 import { MioraClient, MioraError } from "./miora.js";
+import { detectImageIntent, buildImagePrompt } from "./image-intent.js";
 import * as anthropic from "./anthropic.js";
 import * as responses from "./responses.js";
 import { recordUsage } from "./usage.js";
@@ -317,6 +318,19 @@ export function createGateway(options) {
     log,
   });
 
+  // 提交过的视频任务。只是为了日志和「这个 id 是我们发的」的粗校验 ——
+  // 真正的状态永远以上游为准。
+  const videoTasks = new Map();
+
+  // 聊天里自动画图。
+  //
+  // 用户说「画一只猫」→ 直接调生图，把图作为回复返回，跳过聊天模型。
+  //
+  // 默认开。要关掉设 WORKBUDDY_AUTO_IMAGE=0 —— 有些客户端自己有画图
+  // 面板，不需要这层拦截；也方便排查「为什么我的聊天被吞了」。
+  const autoImage = options.autoImage !== false
+    && process.env.WORKBUDDY_AUTO_IMAGE !== "0";
+
   /**
    * 发一次上游请求；被限流就**换模型重试**。
    *
@@ -460,6 +474,25 @@ export function createGateway(options) {
       return;
     }
 
+    // ── 视频生成 ──────────────────────────────────────────────
+    //
+    // OpenAI 官方没有视频接口，业界主要有两种写法，这里都收：
+    //   /v1/video/generations   （跟 images 对称，更常见）
+    //   /v1/videos
+    if (req.method === "POST" &&
+        (url === "/v1/video/generations" || url === "/v1/video/generations/" ||
+         url === "/v1/videos" || url === "/v1/videos/")) {
+      await videoGenerations(req, res);
+      return;
+    }
+
+    // 视频是异步的（要渲染几百帧），另给一个查任务的端点，
+    // 免得客户端把 HTTP 连接一直挂着。
+    if (req.method === "GET" && url.startsWith("/v1/video/status/")) {
+      await videoStatus(req, res, url.slice("/v1/video/status/".length));
+      return;
+    }
+
     // 网关自己存下来的生成结果。
     //
     // 为什么不让客户端直接用上游的签名 URL：那个 URL 1 小时失效，
@@ -576,6 +609,198 @@ export function createGateway(options) {
   //
   // 三个函数对应上面三个路由。都按 OpenAI 的图片接口规范做，
   // 这样客户端不用改代码。
+
+
+  /**
+   * POST /v1/video/generations
+   *
+   * 视频和图片有两个区别：
+   *
+   *   ① **慢**。图片通常 10-30 秒，视频要几分钟。所以这里默认
+   *      「提交就走」——立刻返回任务 id，客户端轮询查状态。
+   *      传 `wait: true` 才会一直等（最多 15 分钟）。
+   *
+   *   ② 参数多。duration / resolution / aspect_ratio，还有可选的
+   *      首尾帧、参考图。
+   *
+   * 请求体：
+   *   {
+   *     prompt,                    // 必填（首尾帧模式下可省）
+   *     mode?: "text" | "frame" | "reference",   // 默认 text
+   *     duration?, resolution?, aspect_ratio?,
+   *     first_frame_image?,        // mode=frame 时用
+   *     last_frame_image?,
+   *     references?: [图...],      // mode=reference 时用
+   *     wait?: boolean             // true = 等到底再返回
+   *   }
+   */
+  async function videoGenerations(req, res) {
+    const parsed = await readJsonBody(req);
+    if (!parsed.ok) {
+      writeOpenAIError(res, parsed.status, parsed.kind, parsed.message);
+      return;
+    }
+
+    const body = parsed.request ?? {};
+    const mode = typeof body.mode === "string" ? body.mode : "text";
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+
+    // prompt 在纯文生视频时必填；首尾帧/参考图模式可以只给图
+    if (prompt === "" && mode === "text") {
+      writeOpenAIError(res, 400, "invalid_request_error",
+        "mode=text 时 prompt 不能为空");
+      return;
+    }
+
+    // 组装上游要的 body
+    let upstreamBody;
+    if (mode === "frame") {
+      const first = resolveMedia(body.first_frame_image);
+      if (first === undefined) {
+        writeOpenAIError(res, 400, "invalid_request_error",
+          "mode=frame 时要给 first_frame_image");
+        return;
+      }
+      const input = { first_frame_image: first };
+      const last = resolveMedia(body.last_frame_image);
+      if (last !== undefined) input.last_frame_image = last;
+      upstreamBody = { input };
+    } else if (mode === "reference") {
+      const refs = Array.isArray(body.references) ? body.references : [];
+      const resolved = refs.map(resolveMedia).filter((r) => r !== undefined);
+      if (resolved.length === 0) {
+        writeOpenAIError(res, 400, "invalid_request_error",
+          "mode=reference 时 references 至少要有一张图");
+        return;
+      }
+      upstreamBody = { input: { reference_images: resolved } };
+    } else {
+      upstreamBody = {};
+    }
+
+    // 公共字段
+    if (prompt !== "") upstreamBody.prompt = prompt;
+    if (typeof body.duration === "number" && Number.isFinite(body.duration)) {
+      upstreamBody.duration = body.duration;
+    }
+    if (typeof body.resolution === "string" && body.resolution !== "") {
+      upstreamBody.resolution = body.resolution;
+    }
+    if (typeof body.aspect_ratio === "string" && body.aspect_ratio !== "") {
+      upstreamBody.aspect_ratio = body.aspect_ratio;
+    }
+
+    // 「提交就走」模式：立刻回一个任务 id，客户端自己轮询
+    if (body.wait !== true) {
+      try {
+        const key = await miora.getTempKey();
+        const submit = await miora.submitRaw("video", upstreamBody);
+        const taskId = submit?.upstreamTaskId;
+        if (typeof taskId !== "string" || taskId === "") {
+          writeOpenAIError(res, 502, "upstream_error", "上游没返回任务 id");
+          return;
+        }
+        videoTasks.set(taskId, { createdAt: Date.now(), model: submit.model ?? "" });
+        log(`[video] 任务已提交 ${taskId}，模型 ${submit.model ?? "?"}`);
+        writeJson(res, 200, {
+          id: taskId,
+          object: "video.generation",
+          created: Math.floor(Date.now() / 1000),
+          status: submit.status ?? "pending",
+          model: submit.model ?? "",
+          // 客户端可以拿这个查状态
+          status_url: `/v1/video/status/${taskId}`,
+        });
+      } catch (error) {
+        respondMioraError(res, error, "[video]");
+      }
+      return;
+    }
+
+    // 等待模式：一直轮询到完成
+    try {
+      const started = Date.now();
+      const result = await miora.submit("video", undefined, upstreamBody);
+      const files = result.files;
+      if (files.length === 0) {
+        writeOpenAIError(res, 502, "upstream_error",
+          result.errorMessage ?? "上游没有返回视频");
+        return;
+      }
+      const media = await miora.download(files[0].url);
+      log(`[video] 生成完成，耗时 ${Math.round((Date.now() - started) / 1000)}s`);
+      writeJson(res, 200, {
+        created: Math.floor(Date.now() / 1000),
+        data: [{ url: `/v1/images/file/${media.file}` }],
+        model: result.model,
+      });
+    } catch (error) {
+      respondMioraError(res, error, "[video]");
+    }
+  }
+
+  /**
+   * GET /v1/video/status/<taskId>
+   *
+   * 查一个视频任务。完成后会把文件下载到本地，返回网关的 URL。
+   *
+   * 为什么在这里下载而不是让客户端自己取：上游给的是 1 小时过期的
+   * 腾讯云签名 URL，客户端可能过几小时才来看。
+   */
+  async function videoStatus(req, res, taskId) {
+    if (typeof taskId !== "string" || taskId === "") {
+      writeOpenAIError(res, 400, "invalid_request_error", "缺少任务 id");
+      return;
+    }
+
+    try {
+      const entry = await miora.query("video", taskId);
+      const status = entry?.status ?? "unknown";
+      const files = entry?.resultFiles ?? entry?.result_files ?? [];
+
+      const payload = {
+        id: taskId,
+        object: "video.generation",
+        status,
+        model: entry?.model ?? "",
+      };
+
+      if (status === "completed" && Array.isArray(files) && files.length > 0) {
+        const url = files[0].signedUrl ?? files[0].url;
+        if (typeof url === "string" && url !== "") {
+          const media = await miora.download(url);
+          payload.data = [{ url: `/v1/images/file/${media.file}` }];
+        }
+      }
+
+      if (entry?.errorMessage) payload.error = { message: entry.errorMessage };
+
+      writeJson(res, 200, payload);
+    } catch (error) {
+      respondMioraError(res, error, "[video]");
+    }
+  }
+
+  /**
+   * 把一个「图片输入」规范化成 Miora 要的 media payload。
+   *
+   * 接受三种形态：
+   *   · https URL        → { url }
+   *   · data:image/...   → { base64 }
+   *   · 裸 base64        → { base64 }
+   *
+   * @returns {object|undefined} 给不出有效值就返回 undefined（调用方报 400）
+   */
+  function resolveMedia(input) {
+    if (typeof input !== "string" || input === "") return undefined;
+    if (input.startsWith("http://") || input.startsWith("https://")) return { url: input };
+    if (input.startsWith("data:")) {
+      const comma = input.indexOf(",");
+      if (comma < 0) return undefined;
+      return { base64: input.slice(comma + 1) };
+    }
+    return { base64: input };
+  }
 
   /**
    * POST /v1/images/generations
@@ -780,6 +1005,128 @@ export function createGateway(options) {
     writeOpenAIError(res, 500, "internal_error", String(error?.message ?? error));
   }
 
+
+  // ── 自动画图的辅助函数 ──────────────────────────────────────
+
+  /** 请求里有没有图片输入（有的话说明用户在讨论图，不是在要新图）。 */
+  function hasImageContent(request) {
+    const messages = Array.isArray(request.messages) ? request.messages : [];
+    return messages.some((m) => {
+      if (!m || typeof m !== "object") return false;
+      const content = m.content;
+      if (Array.isArray(content)) {
+        return content.some((part) =>
+          part && typeof part === "object" && part.type === "image_url");
+      }
+      return false;
+    });
+  }
+
+  /** 请求里带工具了就不插手 —— 那是 agent 在干活，不该被截胡。 */
+  function hasToolUse(request) {
+    return Array.isArray(request.tools) && request.tools.length > 0;
+  }
+
+  /**
+   * 最后一条 user 消息的纯文本。
+   *
+   * 只看最后一条 —— 历史里出现过的「画」不代表现在要画。
+   */
+  function lastUserText(request) {
+    const messages = Array.isArray(request.messages) ? request.messages : [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (!m || typeof m !== "object" || m.role !== "user") continue;
+      if (typeof m.content === "string") return m.content;
+      if (Array.isArray(m.content)) {
+        return m.content
+          .filter((p) => p && typeof p === "object" && p.type === "text")
+          .map((p) => String(p.text ?? ""))
+          .join("\n");
+      }
+      return "";
+    }
+    return "";
+  }
+
+  /**
+   * 试着把「画图请求」直接变成图片。
+   *
+   * @returns {Promise<boolean>} true = 已经处理完了（响应已发出），
+   *                            false = 没成功，调用方该走正常聊天
+   */
+  async function tryAutoImage(res, request, intent, wantsStream, credential) {
+    const prompt = buildImagePrompt(intent.prompt);
+    if (prompt === "") return false;
+
+    const startedImg = Date.now();
+    try {
+      log(`[auto-image] 识别到画图请求：「${prompt.slice(0, 50)}」（${intent.reason}）`);
+
+      const result = await miora.submit("image", "generate", { prompt });
+      if (result.files.length === 0) return false;
+
+      const media = await miora.download(result.files[0].url);
+      const url = `/v1/images/file/${media.file}`;
+      const model = String(request["model"] ?? "");
+      const id = `chatcmpl-img-${Date.now().toString(36)}`;
+
+      // 回复文案：说清楚「这是生成的图」，并把地址给出来。
+      //
+      // 为什么要给 URL：OpenAI 的 chat 响应里没有图片字段，
+      // 只能靠文字或 markdown。多数客户端会把 markdown 图片渲染出来。
+      const text = `已生成图片：![生成结果](${url})\n\n地址：${url}`;
+
+      log(`[auto-image] 完成，耗时 ${Date.now() - startedImg}ms，模型 ${result.model}`);
+
+      if (!wantsStream) {
+        writeJson(res, 200, {
+          id,
+          object: "chat.completion",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: text },
+            finish_reason: "stop",
+          }],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        });
+      } else {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+        });
+        res.flushHeaders?.();
+        const chunk = (delta, finish = null) => JSON.stringify({
+          id, object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{ index: 0, delta, finish_reason: finish }],
+        });
+        res.write(`data: ${chunk({ role: "assistant" })}\n\n`);
+        res.write(`data: ${chunk({ content: text })}\n\n`);
+        res.write(`data: ${chunk({}, "stop")}\n\n`);
+        res.write("data: [DONE]\n\n");
+        res.end();
+      }
+
+      void recordUsage({
+        model: String(request["model"] ?? ""), usedModel: result.model,
+        kind: "image", account: accountTag(credential),
+        usage: undefined, outcome: "ok", attempts: 1,
+        elapsedMs: Date.now() - startedImg,
+      });
+
+      return true;
+    } catch (error) {
+      log(`[auto-image] 失败：${error?.message ?? error}`);
+      return false;
+    }
+  }
+
   async function chatCompletions(req, res) {
     const parsed = await readJsonBody(req);
     if (!parsed.ok) {
@@ -803,6 +1150,25 @@ export function createGateway(options) {
     // 记账用：客户端请求的模型名 + 这次请求的起点
     const requestedModel = String(request["model"] ?? "");
     const startedAt = Date.now();
+
+    // ── 自动画图 ──────────────────────────────────────────────
+    //
+    // 聊天模型看不见生图工具（那是桌面 App 会话里的另一条通道），
+    // 所以用户说「画一只猫」它只会回一段提示词。这里提前拦一下：
+    // 识别出是在要图就直接调生图，把图作为回复。
+    //
+    // 判定规则在 image-intent.js，写得**故意保守** ——
+    // 漏判无害（用户再说一次），误判要花一次生图额度。
+    if (autoImage && !hasImageContent(request) && !hasToolUse(request)) {
+      const intent = detectImageIntent(lastUserText(request));
+      if (intent.wants) {
+        const handled = await tryAutoImage(res, request, intent, wantsStream, credential);
+        if (handled) return;
+        // 生图失败就往下走正常聊天流程 —— 让模型回句话，
+        // 总比给用户一个生硬的错误强。
+        log(`[auto-image] 生图没成功，回退到聊天（${intent.prompt.slice(0, 40)}）`);
+      }
+    }
 
     const resolvedModel = resolveModel(request["model"]);
     const { result, model: usedModel, attempts } = await sendWithFallback({
