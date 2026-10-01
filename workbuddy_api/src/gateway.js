@@ -628,17 +628,21 @@ export function createGateway(options) {
     const controller = new AbortController();
     req.on("close", () => controller.abort());
 
-    // 带换模型重试的发送：某个模型被限流时会自动换下一个，用户无感。
-    const { result, model: usedModel, attempts } = await sendWithFallback({
-      credential,
-      request,
-      model: ctx.model,
-      signal: controller.signal,
-      prepare: (body) => prepareBodyFor(variant, adapter.toChat(body, ctx)),
-      tag: `[${adapter.name}]`,
-    });
+    // 翻译一次的 Chat 请求 —— 两条路径都用它
+    const toChatOnce = () => adapter.toChat(request, ctx);
 
-    if (!result.ok) {
+    /** 把媒体工具注入到**已经翻译成 Chat 格式**的请求上。 */
+    const injectInto = (chatBody) => {
+      if (!mediaToolsEnabled) return chatBody;
+      const info = injectMediaTools(chatBody);
+      if (info.injected.length > 0) {
+        log(`[agent] 注入 ${info.injected.length} 个媒体工具：${info.injected.join(", ")}`);
+      }
+      return chatBody;
+    };
+
+    /** 一条失败路径：把上游的错误转成客户端协议的形状。 */
+    const failWith = (result, attempts) => {
       log(`[${adapter.name}] upstream ${result.kind} (http ${result.status}) 试过：${attempts.join(" → ") || "-"}`);
       const extra = attempts.length > 1 ? `（已试过 ${attempts.join(" → ")}）` : "";
       const shaped = adapter.error(
@@ -647,37 +651,140 @@ export function createGateway(options) {
         `workbuddy upstream ${result.kind} (http ${result.status}): ${result.message.slice(0, 400)}${extra}`,
       );
       writeJson(res, shaped.status, shaped.body);
+    };
+
+    // ── 关闭工具时的老路径：单发，不做循环 ──────────────────
+    if (!mediaToolsEnabled) {
+      const { result, model: usedModel, attempts } = await sendWithFallback({
+        credential,
+        request,
+        model: ctx.model,
+        signal: controller.signal,
+        prepare: (body) => prepareBodyFor(variant, adapter.toChat(body, ctx)),
+        tag: `[${adapter.name}]`,
+      });
+
+      if (!result.ok) {
+        failWith(result, attempts);
+        return;
+      }
+
+      // 回给客户端的模型名要用**实际用的那个** —— 换过模型的话，
+      // 不然日志和界面对不上，排查时会很迷惑。
+      ctx.model = usedModel;
+
+      if (!wantsStream) {
+        const completion = await collectChatCompletion(result.response);
+        writeJson(res, 200, adapter.fromCompletion(completion, ctx));
+        void recordUsage({
+          model: ctx.requestedModel, usedModel, kind: adapter.name, account: accountTag(credential),
+          usage: completion?.["usage"], outcome: "ok", attempts: attempts.length,
+          elapsedMs: Date.now() - startedAt,
+        });
+        return;
+      }
+
+      beginSse(res);
+      const writer = adapter.createStream(res, ctx);
+      try {
+        for await (const payload of iterateSseData(result.response.body)) {
+          if (payload === "[DONE]") break;
+          // 记账要用的 usage（含 credit）在 rename 之前先抠出来
+          captureUsage(payload);
+          writer.push(renameChunkModel(payload, usedModel));
+        }
+        writer.finish();
+        void recordUsage({
+          model: ctx.requestedModel, usedModel, kind: adapter.name, account: accountTag(credential),
+          usage: lastUsage, outcome: "ok", attempts: attempts.length,
+          elapsedMs: Date.now() - startedAt,
+        });
+        lastUsage = null;
+      } catch (error) {
+        log(`[${adapter.name}] stream failed mid-flight: ${String(error)}`);
+        writer.fail(error);
+      }
       return;
     }
 
-    // 回给客户端的模型名要用**实际用的那个** —— 换过模型的话，
-    // 不然日志和界面对不上，排查时会很迷惑。
-    ctx.model = usedModel;
+    // ── 开了工具：走 agent 循环 ────────────────────────────
+    //
+    // ⚠ 这里为什么不用 adapter.toChat 每次现翻译（踩过的坑）：
+    //
+    // agent 循环要往对话里追加 assistant(tool_calls) 和 tool 消息。
+    // 如果每轮都从**客户端的原始请求**重新翻译，那些追加的消息会被
+    // 丢掉 —— 因为客户端的 Anthropic/Responses 请求里根本没有它们。
+    //
+    // 所以：翻译**一次**，拿到 Chat 格式的请求，之后循环就在这一份上
+    // 追加。这也是为什么 chatCompletions 那条路径能正常工作 ——
+    // 它本来就是 Chat 格式，追加是直接的。
+    const chatRequest = injectInto(toChatOnce());
+
+    const sendRound = () => sendWithFallback({
+      credential,
+      request: chatRequest,
+      model: ctx.model,
+      signal: controller.signal,
+      prepare: (body) => prepareBodyFor(variant, body),
+      tag: `[${adapter.name}]`,
+    });
+
+    const agentCtx = {
+      request: chatRequest,
+      miora,
+      makeUrl: (file) => imageUrl(req, file),
+      log,
+      trackVideoTask: (taskId, model) => videoTasks.set(taskId, { createdAt: Date.now(), model: model ?? "" }),
+    };
+
+    const logRound = ({ round, calls, results }) => {
+      log(`[agent] 第 ${round} 轮执行 ${calls.length} 个工具：`
+        + calls.map((c, k) => `${c.function?.name}=${results[k]?.ok ? "ok" : "fail"}`).join(", "));
+    };
 
     if (!wantsStream) {
-      const completion = await collectChatCompletion(result.response);
-      writeJson(res, 200, adapter.fromCompletion(completion, ctx));
+      const outcome = await runAgentNonStreaming({ ...agentCtx, send: sendRound, onRound: logRound });
+
+      if (outcome.error !== undefined) {
+        failWith(outcome.error.result, outcome.error.attempts);
+        return;
+      }
+
+      writeJson(res, 200, adapter.fromCompletion(outcome.completion, ctx));
       void recordUsage({
-        model: ctx.requestedModel, usedModel, kind: adapter.name, account: accountTag(credential),
-        usage: completion?.["usage"], outcome: "ok", attempts: attempts.length,
+        model: ctx.requestedModel, usedModel: ctx.model, kind: adapter.name, account: accountTag(credential),
+        usage: outcome.completion?.["usage"], outcome: "ok", attempts: 1,
         elapsedMs: Date.now() - startedAt,
       });
       return;
     }
 
+    // 流式：agent 循环吐出来的是**上游原样的分片对象**，
+    // 要逐个交给 adapter 的 writer，让它转成客户端要的协议。
     beginSse(res);
     const writer = adapter.createStream(res, ctx);
+
     try {
-      for await (const payload of iterateSseData(result.response.body)) {
-        if (payload === "[DONE]") break;
-        // 记账要用的 usage（含 credit）在 rename 之前先抠出来
-        captureUsage(payload);
-        writer.push(renameChunkModel(payload, usedModel));
+      const outcome = await runAgentStreaming({
+        ...agentCtx,
+        send: sendRound,
+        emit: (chunk) => {
+          // renameChunkModel 收的是字符串，所以要序列化回去
+          writer.push(renameChunkModel(JSON.stringify(chunk), ctx.model));
+        },
+        keepalive: () => { if (!res.writableEnded) res.write(": keepalive\n\n"); },
+        onRound: logRound,
+      });
+
+      if (outcome.error !== undefined) {
+        writer.fail(new Error(`workbuddy upstream ${outcome.error.result?.kind ?? "error"}`));
+      } else {
+        writer.finish();
       }
-      writer.finish();
+
       void recordUsage({
-        model: ctx.requestedModel, usedModel, kind: adapter.name, account: accountTag(credential),
-        usage: lastUsage, outcome: "ok", attempts: attempts.length,
+        model: ctx.requestedModel, usedModel: ctx.model, kind: adapter.name, account: accountTag(credential),
+        usage: lastUsage, outcome: outcome.error === undefined ? "ok" : "failed", attempts: 1,
         elapsedMs: Date.now() - startedAt,
       });
       lastUsage = null;

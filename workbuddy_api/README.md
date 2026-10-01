@@ -185,8 +185,19 @@ GET /v1/images/file/<hash>.png                客户端随时来取
 
 **跟模型说「画一只猫」就会出图**，不用调上面那个端点。
 
-而且 —— **外接的客户端也一样能用**。Claude Code、pi、DSH、
-任何走 OpenAI 协议的客户端，接上这个网关就能生图。
+而且 —— **四种协议都支持**。不管客户端走哪条路，接上就能生图：
+
+| 协议 | 端点 | 谁在用 |
+|---|---|---|
+| OpenAI Chat | `POST /v1/chat/completions` | pi、Cherry Studio、各种面板 |
+| Anthropic Messages | `POST /v1/messages` | Claude Code |
+| OpenAI Responses | `POST /v1/responses` | Codex |
+| 面板自带的对话 | 走 Chat | WorkBuddy 控制台 |
+
+> **踩过的坑**：第一版只在 Chat 那条路注入了工具。结果 Claude Code 说
+> 「画一只企鹅」模型回「我无法直接绘制图片」，Codex 说「画一个蓝色三角形」
+> 它写了段 SVG 代码 —— 因为 Anthropic / Responses 共用的 `translated()`
+> 里忘了加。现在 `verify.mjs` 有一节专门盯这个（三条协议各测一遍）。
 
 ### 怎么做的
 
