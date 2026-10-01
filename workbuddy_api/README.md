@@ -109,6 +109,101 @@ src/anthropic.js   Anthropic Messages ←→ Chat（含 tool_use 双向、count_
 src/responses.js   OpenAI Responses ←→ Chat（含 output item 的事件流顺序）
 ```
 
+## 画图（OpenAI 图片接口）
+
+网关不只转发聊天 —— **还能画图**。
+
+```
+POST /v1/images/generations     文生图
+POST /v1/images/edits           改图 / 图生图
+GET  /v1/images/file/<name>     取回生成结果
+```
+
+按 OpenAI 的图片接口规范做，所以 Cherry Studio、各种画图面板、
+自己写的脚本都不用改代码。
+
+### 用法
+
+```bash
+curl http://127.0.0.1:8787/v1/images/generations \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"一只戴墨镜的橘猫，扁平插画风格","size":"1024x1024"}'
+```
+
+```json
+{
+  "created": 1790872167,
+  "data": [{ "url": "/v1/images/file/22c241711fec596ca8900aa8.png" }]
+}
+```
+
+拿到的 `url` 是**网关自己的路径** —— 拼上 base_url 就能取图：
+
+```bash
+curl http://127.0.0.1:8787/v1/images/file/22c241711fec596ca8900aa8.png \
+  -H "Authorization: Bearer $KEY" -o cat.png
+```
+
+### 请求参数
+
+| 字段 | 说明 |
+|---|---|
+| `prompt` | **必填**。描述文字 |
+| `size` | 可选，如 `1024x1024` / `1024x1536` / `1536x1024` |
+| `n` | 可选，要几张（1-4）。上游一次一张，这里并发多跑几次 |
+| `response_format` | `url`（默认，给网关路径）或 `b64_json`（直接给 base64） |
+| `quality` | 可选，透传给上游 |
+
+改图 `POST /v1/images/edits` 多一个字段：
+
+| 字段 | 说明 |
+|---|---|
+| `image` | **必填**。可以是 https URL、`data:image/png;base64,...`，或者裸 base64 |
+
+### 它走的是哪条路
+
+**不是聊天模型。** WorkBuddy 把生成能力做成了独立的服务（内部叫 Miora），
+域名 `public.miora.qq.com`。链路：
+
+```
+网关
+  ↓ 用保险库里的登录 JWT
+POST https://www.codebuddy.cn/v2/api-keys     换一个 15 分钟的临时凭据
+  ↓
+POST https://public.miora.qq.com/api/ai/workbuddy-proxy/image/generate/submit
+  ↓
+{model: "hy-image-3.5-wb", status: "completed", resultFiles: [{signedUrl}]}
+  ↓ 下载下来存本地（上游给的是 1 小时失效的签名 URL）
+GET /v1/images/file/<hash>.png                客户端随时来取
+```
+
+代码在 `src/miora.js`。临时凭据有缓存（同一个账号复用，切号自动重取，
+上游说失效会自动重取一次）。
+
+### 为什么聊天模型不会自己画
+
+问它「画一只猫」，它会回你一段提示词 —— 那是**正常的**：
+
+```
+聊天模型看到的是消息，看不到生图工具。
+生图工具（miora_text_to_image 等 8 个）走另一条 MCP 通道，
+只在桌面 App 自己的会话里挂着。
+```
+
+所以画图要用上面那个独立端点 —— 这也是 OpenAI 的做法（Chat 和 Images 分开）。
+
+### 生成的文件放哪
+
+```
+~/.workbuddy-api/media/<内容哈希>.png
+```
+
+文件名是内容的 SHA256 前 24 位 —— **同一张图重复下载会覆盖，不会越积越多**。
+权限 0600（和账号保险库一致）。
+
+想清空直接删这个目录。
+
 ### 模型别名（重要）
 
 Claude Code 会报 `claude-sonnet-4-5-20250929`，Codex 会报 `gpt-5.6-sol`，

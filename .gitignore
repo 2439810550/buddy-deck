@@ -77,3 +77,6 @@ _qa/
 # 测试项目的构建产物
 WorkBuddyPanel/tests/**/obj/
 WorkBuddyPanel/tests/**/bin/
+
+# DeepSeek Harness 官方仓库（调研用，临时克隆）
+_dsh/

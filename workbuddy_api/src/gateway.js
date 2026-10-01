@@ -31,6 +31,7 @@ import {
 } from "./upstream.js";
 import { beginSse, createModelResolver } from "./protocol.js";
 import { RateLimitTracker, describeRateLimit, isRateLimited, pickFallbackModel } from "./ratelimit.js";
+import { MioraClient, MioraError } from "./miora.js";
 import * as anthropic from "./anthropic.js";
 import * as responses from "./responses.js";
 import { recordUsage } from "./usage.js";
@@ -306,6 +307,16 @@ export function createGateway(options) {
   //   2. 把被拦的模型记进冷却表，窗口内不再拿它白试
   const rateLimits = new RateLimitTracker();
 
+  // Miora —— 生图/生视频服务。
+  //
+  // 为什么用惰性 credential 而不是启动时就取：账号可以在运行时切
+  // （多账号轮询、用户手动换号），每次调用现取才能跟上。
+  const miora = new MioraClient({
+    credential: () => store.resolve(),
+    workbuddyBase: variant.billingBase,
+    log,
+  });
+
   /**
    * 发一次上游请求；被限流就**换模型重试**。
    *
@@ -434,6 +445,30 @@ export function createGateway(options) {
       return;
     }
 
+    // ── 生图 ──────────────────────────────────────────────────
+    //
+    // 走 Miora（WorkBuddy 内置的生成服务），不是聊天模型。
+    // 接口按 OpenAI 规范做，这样 Cherry Studio / 各种画图面板
+    // 不用改任何代码就能用。
+    if (req.method === "POST" && (url === "/v1/images/generations" || url === "/v1/images/generations/")) {
+      await imagesGenerations(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && (url === "/v1/images/edits" || url === "/v1/images/edits/")) {
+      await imagesEdits(req, res);
+      return;
+    }
+
+    // 网关自己存下来的生成结果。
+    //
+    // 为什么不让客户端直接用上游的签名 URL：那个 URL 1 小时失效，
+    // 客户端如果存下来晚点再看就打不开了。这里中转一层，永久可用。
+    if (req.method === "GET" && url.startsWith("/v1/images/file/")) {
+      await serveGeneratedFile(req, res, url.slice("/v1/images/file/".length));
+      return;
+    }
+
     writeOpenAIError(res, 404, "not_found", `no such route: ${req.method} ${url}`);
   }
 
@@ -534,6 +569,215 @@ export function createGateway(options) {
       log(`[${adapter.name}] stream failed mid-flight: ${String(error)}`);
       writer.fail(error);
     }
+  }
+
+
+  // ── 生图 / 改图 / 交付生成结果 ──────────────────────────────
+  //
+  // 三个函数对应上面三个路由。都按 OpenAI 的图片接口规范做，
+  // 这样客户端不用改代码。
+
+  /**
+   * POST /v1/images/generations
+   *
+   * 请求（OpenAI 规范）：
+   *   { prompt, model?, n?, size?, quality?, response_format? }
+   *
+   * 我们支持 response_format:
+   *   · "url"（默认）—— 返回网关自己的 URL（不过期）
+   *   · "b64_json"   —— 直接给 base64，客户端不用再请求一次
+   *
+   * `n > 1` 时并发提交多个任务 —— Miora 一次只生一张。
+   */
+  async function imagesGenerations(req, res) {
+    const parsed = await readJsonBody(req);
+    if (!parsed.ok) {
+      writeOpenAIError(res, parsed.status, parsed.kind, parsed.message);
+      return;
+    }
+
+    const body = parsed.request ?? {};
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    if (prompt === "") {
+      writeOpenAIError(res, 400, "invalid_request_error", "prompt 不能为空");
+      return;
+    }
+
+    // n：OpenAI 允许 1-10。上游一次一张，这里并发多跑几次。
+    const n = Number.isInteger(body.n) && body.n > 0 ? Math.min(body.n, 4) : 1;
+
+    const upstreamBody = { prompt };
+    if (typeof body.size === "string" && body.size !== "" && body.size !== "auto") {
+      upstreamBody.size = body.size;
+    }
+    if (typeof body.quality === "string" && body.quality !== "") {
+      upstreamBody.quality = body.quality;
+    }
+
+    const started = Date.now();
+    try {
+      const results = await Promise.all(
+        Array.from({ length: n }, () => miora.submit("image", "generate", upstreamBody)),
+      );
+
+      const files = results.flatMap((r) => r.files);
+      if (files.length === 0) {
+        const failed = results.find((r) => r.errorMessage);
+        writeOpenAIError(
+          res, 502, "upstream_error",
+          failed?.errorMessage ?? "上游没有返回图片",
+        );
+        return;
+      }
+
+      const wanted = body.response_format === "b64_json" ? "b64_json" : "url";
+      const data = await Promise.all(
+        files.map(async (f) => {
+          const media = await miora.download(f.url);
+          if (wanted === "b64_json") {
+            const { readFile } = await import("node:fs/promises");
+            const { join } = await import("node:path");
+            const buffer = await readFile(join(MioraClient.mediaDir(), media.file));
+            return { b64_json: buffer.toString("base64") };
+          }
+          return { url: `/v1/images/file/${media.file}` };
+        }),
+      );
+
+      log(`[images] 生成 ${data.length} 张，耗时 ${Date.now() - started}ms，模型 ${results[0]?.model ?? "?"}`);
+      writeJson(res, 200, {
+        created: Math.floor(Date.now() / 1000),
+        data,
+      });
+    } catch (error) {
+      respondMioraError(res, error, "[images]");
+    }
+  }
+
+  /**
+   * POST /v1/images/edits
+   *
+   * OpenAI 规范里这是 multipart/form-data（带 image 文件）。
+   * 这里同时接受 JSON 形式 —— 因为很多客户端（尤其国内工具）
+   * 更愿意直接传 base64：
+   *
+   *   { image: "<base64 或 data URI 或 https URL>", prompt, size? }
+   */
+  async function imagesEdits(req, res) {
+    const parsed = await readJsonBody(req);
+    if (!parsed.ok) {
+      writeOpenAIError(res, parsed.status, parsed.kind, parsed.message);
+      return;
+    }
+
+    const body = parsed.request ?? {};
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    if (prompt === "") {
+      writeOpenAIError(res, 400, "invalid_request_error", "prompt 不能为空");
+      return;
+    }
+
+    const image = body.image ?? body.image_url;
+    if (typeof image !== "string" || image === "") {
+      writeOpenAIError(
+        res, 400, "invalid_request_error",
+        "要提供 image：可以是 https URL、data URI，或者裸 base64",
+      );
+      return;
+    }
+
+    // 组装 Miora 要的 media payload。
+    // 上游接受三种：base64 / url / file_key。这里按输入形态判断。
+    let media;
+    if (image.startsWith("http://") || image.startsWith("https://")) {
+      media = { url: image };
+    } else if (image.startsWith("data:")) {
+      const comma = image.indexOf(",");
+      if (comma < 0) {
+        writeOpenAIError(res, 400, "invalid_request_error", "data URI 格式不对");
+        return;
+      }
+      media = { base64: image.slice(comma + 1) };
+    } else {
+      media = { base64: image };
+    }
+
+    const upstreamBody = { prompt, images: [media] };
+    if (typeof body.size === "string" && body.size !== "" && body.size !== "auto") {
+      upstreamBody.size = body.size;
+    }
+
+    try {
+      const result = await miora.submit("image", "edit", upstreamBody);
+      const files = result.files;
+      if (files.length === 0) {
+        writeOpenAIError(res, 502, "upstream_error", result.errorMessage ?? "上游没有返回图片");
+        return;
+      }
+
+      const wanted = body.response_format === "b64_json" ? "b64_json" : "url";
+      const data = await Promise.all(
+        files.map(async (f) => {
+          const m = await miora.download(f.url);
+          if (wanted === "b64_json") {
+            const { readFile } = await import("node:fs/promises");
+            const { join } = await import("node:path");
+            const buffer = await readFile(join(MioraClient.mediaDir(), m.file));
+            return { b64_json: buffer.toString("base64") };
+          }
+          return { url: `/v1/images/file/${m.file}` };
+        }),
+      );
+
+      log(`[images] 改图 ${data.length} 张，模型 ${result.model}`);
+      writeJson(res, 200, {
+        created: Math.floor(Date.now() / 1000),
+        data,
+      });
+    } catch (error) {
+      respondMioraError(res, error, "[images]");
+    }
+  }
+
+  /** GET /v1/images/file/<name> —— 把网关存下来的生成结果发回去。 */
+  async function serveGeneratedFile(req, res, name) {
+    // 只允许「哈希.扩展名」这种名字 —— 防止有人用 ../ 读别的文件
+    if (!/^[a-f0-9]{8,64}\.(png|jpg|jpeg|webp|mp4)$/i.test(name)) {
+      writeOpenAIError(res, 400, "invalid_request_error", "文件名不合法");
+      return;
+    }
+
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const file = join(MioraClient.mediaDir(), name);
+
+    try {
+      const buffer = await readFile(file);
+      const ext = name.split(".").pop().toLowerCase();
+      const mime = ext === "jpg" || ext === "jpeg" ? "image/jpeg"
+        : ext === "webp" ? "image/webp"
+        : ext === "mp4" ? "video/mp4"
+        : "image/png";
+      res.writeHead(200, {
+        "Content-Type": mime,
+        "Content-Length": buffer.length,
+        "Cache-Control": "public, max-age=31536000, immutable",
+      });
+      res.end(buffer);
+    } catch {
+      writeOpenAIError(res, 404, "not_found", "找不到这个文件（可能已被清理）");
+    }
+  }
+
+  /** 统一把 MioraError 转成 OpenAI 格式的错误响应。 */
+  function respondMioraError(res, error, tag) {
+    if (error instanceof MioraError) {
+      log(`${tag} ${error.code}: ${error.message}`);
+      writeOpenAIError(res, error.status, error.openaiType, error.message);
+      return;
+    }
+    log(`${tag} 未预期的错误: ${String(error)}`);
+    writeOpenAIError(res, 500, "internal_error", String(error?.message ?? error));
   }
 
   async function chatCompletions(req, res) {
