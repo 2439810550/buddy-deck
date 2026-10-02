@@ -34,6 +34,7 @@ import { beginSse, createModelResolver } from "./protocol.js";
 import { RateLimitTracker, describeRateLimit, isRateLimited, pickFallbackModel } from "./ratelimit.js";
 import { createHmac } from "node:crypto";
 import { MioraClient, MioraError } from "./miora.js";
+import { SearchClient, SearchError, formatSearchResults } from "./search.js";
 import { injectMediaTools, mediaTools } from "./media-tools.js";
 import { runAgentNonStreaming, runAgentStreaming } from "./agent.js";
 import * as anthropic from "./anthropic.js";
@@ -371,6 +372,17 @@ export function createGateway(options) {
     log,
   });
 
+  // WorkBuddy 的联网能力（搜索 / 抓取）。
+  //
+  // 和 Miora 同一个理由用惰性 credential：账号可以运行时切换，每次现取
+  // 才能跟上；而且这样**不需要**自己维护一份 token 文件 —— 续期、换号
+  // 都由 CredentialStore 负责。
+  const search = new SearchClient({
+    variant,
+    credential: () => store.resolve(),
+    logger: log,
+  });
+
   // 提交过的视频任务。只是为了日志和「这个 id 是我们发的」的粗校验 ——
   // 真正的状态永远以上游为准。
   const videoTasks = new Map();
@@ -605,6 +617,23 @@ export function createGateway(options) {
     // 免得客户端把 HTTP 连接一直挂着。
     if (req.method === "GET" && url.startsWith("/v1/video/status/")) {
       await videoStatus(req, res, url.slice("/v1/video/status/".length));
+      return;
+    }
+
+    // ── 联网能力（搜索 / 抓取）────────────────────────────────
+    //
+    // 把 WorkBuddy Agent 的 web_search / web_fetch 两个服务端工具反代出去。
+    // 为什么要暴露成自己的 HTTP 端点、而不是让客户端直连上游：
+    //   · 客户端拿不到 WorkBuddy 凭据，也不该拿到
+    //   · 上游那套 token 续期、换号逻辑这里已经做好了
+    //   · 客户端只需要一个 base_url + 本网关的 api_key
+    if (req.method === "POST" && (url === "/v1/search" || url === "/v1/search/")) {
+      await webSearch(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && (url === "/v1/webfetch" || url === "/v1/webfetch/")) {
+      await webFetch(req, res);
       return;
     }
 
@@ -1226,6 +1255,129 @@ export function createGateway(options) {
     }
     log(`${tag} 未预期的错误: ${String(error)}`);
     writeOpenAIError(res, 500, "internal_error", String(error?.message ?? error));
+  }
+
+  // ── 联网端点 ────────────────────────────────────────────
+
+  /**
+   * POST /v1/search —— 联网搜索。
+   *
+   * 请求体（都宽松，字段名同时接受 camelCase 与 snake_case）：
+   *   { query, max_results|maxResults, freshness,
+   *     include_domains|includeDomains, exclude_domains|excludeDomains,
+   *     format: "json" | "markdown" }
+   *
+   * 默认回 markdown —— 客户端（CLI / harness）拿到就是能直接塞进上下文的
+   * 文本；要结构化数据时显式传 `format: "json"`。
+   */
+  async function webSearch(req, res) {
+    const parsed = await readJsonBody(req);
+    if (!parsed.ok) {
+      writeOpenAIError(res, parsed.status, parsed.kind, parsed.message);
+      return;
+    }
+    const body = parsed.request ?? {};
+
+    const started = Date.now();
+    try {
+      const result = await search.search({
+        query: body["query"] ?? body["q"],
+        maxResults: intOf(body["max_results"] ?? body["maxResults"]),
+        freshness: body["freshness"],
+        includeDomains: listOf(body["include_domains"] ?? body["includeDomains"] ?? body["sites"]),
+        excludeDomains: listOf(body["exclude_domains"] ?? body["excludeDomains"] ?? body["exclude"]),
+      });
+      log(`[search] "${result.query}" → ${result.totalResults} 条，${Date.now() - started}ms`);
+
+      if (stringOf(body["format"]) === "json") {
+        writeJson(res, 200, { object: "search_result", ...result });
+        return;
+      }
+      // markdown 用 text/plain 而不是 text/markdown：有些客户端不认后者，
+      // 而这里的内容本来就是给人/模型读的，不是给浏览器渲染的。
+      const text = formatSearchResults(result);
+      res.writeHead(200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Length": Buffer.byteLength(text),
+      });
+      res.end(text);
+    } catch (error) {
+      respondSearchError(res, error, "[search]");
+    }
+  }
+
+  /**
+   * POST /v1/webfetch —— 抓取网页正文。
+   *
+   * 请求体：`{ url, prompt?, format?, timeout?, max_length? }`。
+   * 默认回 markdown 正文；`format: "json"` 回完整文档（含 title/truncated）。
+   */
+  async function webFetch(req, res) {
+    const parsed = await readJsonBody(req);
+    if (!parsed.ok) {
+      writeOpenAIError(res, parsed.status, parsed.kind, parsed.message);
+      return;
+    }
+    const body = parsed.request ?? {};
+
+    const started = Date.now();
+    try {
+      const result = await search.fetchPage({
+        url: body["url"],
+        prompt: body["prompt"],
+        format: body["content_format"],
+        timeoutSec: intOf(body["timeout"]),
+        maxLength: intOf(body["max_length"] ?? body["maxLength"]),
+      });
+      log(`[webfetch] ${result.url} → ${result.contentLength} 字符，${Date.now() - started}ms`);
+
+      if (stringOf(body["format"]) === "json") {
+        writeJson(res, 200, { object: "web_fetch_result", ...result });
+        return;
+      }
+      const header = result.title === "" ? result.url : `${result.title}\n${result.url}`;
+      const text = `${header}\n\n${result.content}${result.truncated ? "\n\n[... 内容被上游截断]" : ""}`;
+      res.writeHead(200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Length": Buffer.byteLength(text),
+      });
+      res.end(text);
+    } catch (error) {
+      respondSearchError(res, error, "[webfetch]");
+    }
+  }
+
+  /** 统一把 SearchError 转成 OpenAI 格式的错误响应。 */
+  function respondSearchError(res, error, tag) {
+    if (error instanceof SearchError) {
+      log(`${tag} ${error.code}: ${error.message}`);
+      writeOpenAIError(res, error.status, error.openaiType, error.message);
+      return;
+    }
+    log(`${tag} 未预期的错误: ${String(error)}`);
+    writeOpenAIError(res, 500, "internal_error", String(error?.message ?? error));
+  }
+
+  /** 只在确实是整数时取值，否则 undefined（让下游用默认）。 */
+  function intOf(value) {
+    if (Number.isInteger(value)) return value;
+    // 客户端常常把数字发成字符串（表单、环境变量拼出来的 JSON）
+    if (typeof value === "string" && /^\d+$/u.test(value.trim())) return Number(value.trim());
+    return undefined;
+  }
+
+  /** 只在是非空字符串时取值。 */
+  function stringOf(value) {
+    return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+  }
+
+  /** 接受数组，或逗号分隔的字符串。 */
+  function listOf(value) {
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string" && value.trim() !== "") {
+      return value.split(",").map((item) => item.trim()).filter(Boolean);
+    }
+    return undefined;
   }
 
 

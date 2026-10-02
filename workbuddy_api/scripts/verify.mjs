@@ -432,6 +432,69 @@ async function main() {
     }
   }
 
+  section("Web search and fetch (live WorkBuddy backend)");
+  {
+    // 这两个端点打的是 WorkBuddy 的 /agenttool/v1/*。它们走网关自己的登录态，
+    // 所以这里能顺带验证「凭据链路对联网端点也成立」。
+    const searchResponse = await fetch(`${base}/search`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({ query: "Node.js LTS", max_results: 3 }),
+    });
+    check("POST /v1/search succeeds", searchResponse.status === 200, `got ${searchResponse.status}`);
+    check(
+      "search answers as plain-text markdown",
+      (searchResponse.headers.get("content-type") ?? "").includes("text/plain"),
+    );
+    const searchText = await searchResponse.text();
+    check("search returned results", /^# Search Results for /u.test(searchText.trim()), searchText.slice(0, 120));
+    check("results carry markdown links", /\]\(https?:\/\//u.test(searchText));
+
+    // format=json 必须回结构化数据（脚本要用）
+    const jsonResponse = await fetch(`${base}/search`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({ query: "Node.js LTS", max_results: 2, format: "json" }),
+    });
+    const jsonBody = await jsonResponse.json();
+    check("format=json returns a search_result object", jsonBody.object === "search_result");
+    check("json results are an array", Array.isArray(jsonBody.results));
+    check(
+      "each result has title/url/snippet as strings",
+      jsonBody.results.every(
+        (item) => typeof item.title === "string" && typeof item.url === "string" && typeof item.snippet === "string",
+      ),
+    );
+
+    // 参数校验：太短的查询词必须是 400，不能悄悄回空列表
+    const badResponse = await fetch(`${base}/search`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({ query: "a" }),
+    });
+    check("a too-short query is rejected", badResponse.status === 400, `got ${badResponse.status}`);
+
+    // 抓网页
+    const fetchResponse = await fetch(`${base}/webfetch`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({ url: "https://example.com", prompt: "Summarize", format: "json" }),
+    });
+    check("POST /v1/webfetch succeeds", fetchResponse.status === 200, `got ${fetchResponse.status}`);
+    const fetchBody = await fetchResponse.json();
+    check("fetch reports the page title", fetchBody.title === "Example Domain", String(fetchBody.title));
+    check("fetch returned content", typeof fetchBody.content === "string" && fetchBody.content.length > 0);
+    check("fetch reports status_code 200", fetchBody.statusCode === 200);
+
+    // 非 http(s) 必须被拒，不能拿去打上游
+    const badFetch = await fetch(`${base}/webfetch`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({ url: "file:///etc/passwd" }),
+    });
+    check("a non-http url is rejected", badFetch.status === 400, `got ${badFetch.status}`);
+  }
+
   section("State isolation");
   {
     const { readdir } = await import("node:fs/promises");

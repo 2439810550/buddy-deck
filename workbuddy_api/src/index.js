@@ -48,6 +48,7 @@ export {
   probeEffort,
 } from "./upstream.js";
 export { Catalog, CatalogStore, catalogPath } from "./catalog.js";
+export { SearchClient, SearchError, formatSearchResults } from "./search.js";
 export {
   AtRestKeyProvider,
   WorkBuddyKeyError,

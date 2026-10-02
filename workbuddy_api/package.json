@@ -19,6 +19,7 @@
   "files": [
     "src",
     "docs",
+    "skills",
     "README.md",
     "LICENSE"
   ],
@@ -26,7 +27,8 @@
     "start": "node src/bin.js serve",
     "status": "node src/bin.js status",
     "doctor": "node src/bin.js doctor",
-    "verify": "node scripts/verify.mjs"
+    "verify": "node scripts/verify.mjs",
+    "test": "node scripts/test-agent.mjs && node scripts/test-miora.mjs && node scripts/test-usage.mjs && node scripts/test-search.mjs"
   },
   "keywords": [
     "workbuddy",

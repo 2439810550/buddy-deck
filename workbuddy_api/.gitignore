@@ -6,3 +6,9 @@ node_modules/
 # local runtime state (never commit: contains credential copies)
 .workbuddy-api/
 *.workbuddy-auth.json
+
+# skill-local credentials: the skill talks to the local gateway and must never
+# carry a token, but guard the path anyway so an old direct-connect token.json
+# (or a stray one copied in while debugging) can't be committed by accident.
+skills/**/token.json
+skills/**/*.workbuddy-auth.json

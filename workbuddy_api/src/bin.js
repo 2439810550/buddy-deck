@@ -27,6 +27,7 @@ import { AccountRouter, AccountVault, accountsPath } from "./accounts.js";
 import * as ccswitch from "./ccswitch.js";
 import { ensureCheckedIn, fetchCheckinStatus } from "./checkin.js";
 import { WorkBuddyClient, normalizeCredits } from "./upstream.js";
+import { SearchClient, formatSearchResults } from "./search.js";
 import { CN_VARIANT, requireVariant } from "./variants.js";
 import { configPath, loadConfig, saveConfig } from "./config.js";
 import { logPath, stateHome } from "./paths.js";
@@ -59,7 +60,7 @@ function printHelp() {
     [
       "workbuddy-api — use WorkBuddy desktop models from any CLI",
       "",
-      "Usage: workbuddy-api <serve|status|models|doctor|logout|config|accounts|checkin> [options]",
+      "Usage: workbuddy-api <serve|status|models|doctor|logout|config|accounts|checkin|ccswitch|usage|search> [options]",
       "",
       "  serve    Run a local OpenAI-compatible gateway (default: 127.0.0.1:8787)",
       "  status   Sign-in state, remaining credit, and catalog provenance",
@@ -72,6 +73,8 @@ function printHelp() {
       "                    (--id <id> queries just that one account)",
       "  checkin  Claim today's check-in (all stored accounts, or --id <id>)",
       "  ccswitch Mirror this gateway into CC Switch (--status to just look, --remove to undo)",
+      "  usage    Show the usage ledger (--by account | --days N | --json)",
+      "  search   Web search via WorkBuddy (or --url <u> to fetch a page)",
       "",
       "Common options:",
       "  --provider <id>   workbuddy (default) | workbuddy-ai",
@@ -92,6 +95,14 @@ function printHelp() {
       "config options:",
       "  --set key=value   persist a setting (provider/host/port/apiKey/authFile/authFileAI/defaultModel)",
       "  --unset <key>     clear a setting",
+      "",
+      "search options:",
+      '  workbuddy-api search "关键词" [--max 5] [--freshness d7] [--sites a.com,b.com] [--exclude x.com] [--json]',
+      "  workbuddy-api search --url <url> [--prompt \"总结要点\"] [--timeout 20] [--max-length 100000] [--json]",
+      "    --freshness <d|m|y>  recency window: d1-d30 / m1-m12 / y1-y5 (digits optional)",
+      "    --sites <list>       keep only these domains (filtered locally: the upstream ignores allowed_domains)",
+      "    --exclude <list>     drop these domains (folded into the query as -site:)",
+      "    --json               structured output instead of markdown",
       "",
     ].join("\n"),
   );
@@ -267,6 +278,90 @@ async function primeCatalog({ client, catalog, store, router }) {
 }
 
 /** `status` — sign-in, credit, catalog provenance. */
+/**
+ * `search` —— 用 WorkBuddy 账号联网搜索 / 抓网页。
+ *
+ * 走的是官方 Agent 的两个服务端工具（`/agenttool/v1/search`、
+ * `/agenttool/v1/webfetch`），凭据来自本工具已有的登录态 ——
+ * 所以不需要单独维护一份 token，换号与续期都自动跟上。
+ *
+ * 用法：
+ *     workbuddy-api search "关键词"                 默认 5 条，markdown 输出
+ *     workbuddy-api search "关键词" --max 10
+ *     workbuddy-api search "AI 芯片" --freshness d7 近 7 天
+ *     workbuddy-api search "python" --sites docs.python.org
+ *     workbuddy-api search "话题" --exclude csdn.net
+ *     workbuddy-api search "关键词" --json          机器可读
+ *     workbuddy-api search --url https://a.com --prompt "总结要点"   抓网页
+ */
+async function commandSearch(flags, config) {
+  const json = flags["json"] === true;
+  // flags._ 是数组（parseArgv 收集所有位置参数）。查询词可能带空格且
+  // 被 shell 拆成多个 token，所以 join 回去。
+  const positionals = Array.isArray(flags["_"]) ? flags["_"] : [];
+  const query = positionals.join(" ").trim();
+  const url = typeof flags["url"] === "string" ? flags["url"].trim() : "";
+
+  if (query === "" && url === "") {
+    process.stderr.write(
+      "用法: workbuddy-api search \"关键词\" [--max 5] [--freshness d7] [--sites a.com] [--exclude b.com] [--json]\n" +
+        "      workbuddy-api search --url <url> [--prompt \"总结要点\"] [--json]\n",
+    );
+    return 1;
+  }
+
+  const context = await makeContext(flags, config);
+  const search = new SearchClient({
+    variant: context.variant,
+    credential: () => context.router.resolve(),
+  });
+
+  // 抓网页：`--url` 给了就走抓取，否则搜索。
+  if (url !== "") {
+    const page = await search.fetchPage({
+      url,
+      prompt: typeof flags["prompt"] === "string" ? flags["prompt"] : undefined,
+      timeoutSec: numberFlag(flags["timeout"]),
+      maxLength: numberFlag(flags["max-length"]),
+    });
+    if (json) {
+      process.stdout.write(`${JSON.stringify(page, null, 2)}\n`);
+      return 0;
+    }
+    process.stdout.write(`${page.title === "" ? page.url : `${page.title}\n${page.url}`}\n\n`);
+    process.stdout.write(page.content + (page.truncated ? "\n\n[... 内容被上游截断]\n" : "\n"));
+    return 0;
+  }
+
+  const list = (value) =>
+    typeof value === "string" && value.trim() !== ""
+      ? value.split(",").map((item) => item.trim()).filter(Boolean)
+      : undefined;
+
+  const result = await search.search({
+    query,
+    maxResults: numberFlag(flags["max"]) ?? 5,
+    freshness: typeof flags["freshness"] === "string" ? flags["freshness"] : undefined,
+    includeDomains: list(flags["sites"]),
+    excludeDomains: list(flags["exclude"]),
+  });
+
+  if (json) {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return 0;
+  }
+
+  process.stdout.write(formatSearchResults(result) + "\n");
+  return 0;
+}
+
+/** 只在确实是正整数时返回，否则 undefined（让调用方用默认值）。 */
+function numberFlag(value) {
+  if (Number.isInteger(value) && value > 0) return value;
+  if (typeof value === "string" && /^\d+$/u.test(value.trim())) return Number(value.trim());
+  return undefined;
+}
+
 /**
  * `usage` —— 看用量账本。
  *
@@ -1487,7 +1582,7 @@ async function run(argv) {
     return 0;
   }
 
-  const known = ["serve", "status", "models", "doctor", "logout", "config", "accounts", "checkin", "ccswitch", "usage"];
+  const known = ["serve", "status", "models", "doctor", "logout", "config", "accounts", "checkin", "ccswitch", "usage", "search"];
   if (!known.includes(command)) {
     process.stderr.write(`workbuddy-api: expected ${known.join(", ")}; got ${JSON.stringify(command)}\n`);
     return 1;
@@ -1516,6 +1611,8 @@ async function run(argv) {
         return await commandCcSwitch(flags);
       case "usage":
         return await commandUsage(flags);
+      case "search":
+        return await commandSearch(flags, config);
       default:
         printHelp();
         return 1;
