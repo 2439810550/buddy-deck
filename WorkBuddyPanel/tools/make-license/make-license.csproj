@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    发卡工具：你自己用的，不要发出去。
+
+    它持有私钥，能签出任何授权。私钥泄露 = 整套授权失效。
+
+    用法见 Program.cs 顶部的说明。
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>make-license</AssemblyName>
+    <RootNamespace>MakeLicense</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Standard.Licensing" Version="1.3.0" />
+  </ItemGroup>
+
+</Project>

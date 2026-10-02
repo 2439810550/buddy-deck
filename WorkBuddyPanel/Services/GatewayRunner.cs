@@ -11,7 +11,17 @@ public sealed record GatewayOptions(
     int Port,
     string ApiKey,
     string Provider,
-    string? AuthFile);
+    string? AuthFile)
+{
+    /// <summary>
+    /// 这个实例管哪个账号池（绝对路径）。
+    ///
+    /// workbuddy_api 用 WORKBUDDY_API_HOME 定位 ~/.workbuddy-api 这一类状态目录，
+    /// 所以把它指到不同的目录就等于换了一整套账号 —— 这正是多池并行的手段。
+    /// 空值 = 用 workbuddy_api 自己的默认目录（即「默认池」）。
+    /// </summary>
+    public string? VaultHome { get; init; }
+}
 
 /// <summary>
 /// 把 `node src/bin.js serve` 拉起来当子进程，并把它讲的话转给界面。
@@ -21,6 +31,12 @@ public sealed partial class GatewayRunner : IDisposable
 {
     private Process? _process;
     private bool _disposed;
+
+    /// <summary>池名，纯粹用来区分日志是谁打的。</summary>
+    public string PoolName { get; init; } = "";
+
+    /// <summary>这个实例管的账号池目录（空 = 默认池）。</summary>
+    public string? VaultHome { get; private set; }
 
     public bool IsRunning => _process is { HasExited: false };
 
@@ -45,11 +61,11 @@ public sealed partial class GatewayRunner : IDisposable
         if (IsRunning) return;
 
         if (!File.Exists(options.NodePath))
-            throw new FileNotFoundException($"找不到 node.exe：{options.NodePath}", options.NodePath);
+            throw new FileNotFoundException($"找不到运行环境程序：{options.NodePath}", options.NodePath);
 
         var binJs = CliRunner.DescribeApiDirectory(options.ApiDirectory);
         if (!File.Exists(binJs))
-            throw new FileNotFoundException($"找不到 workbuddy_api 的入口文件：{binJs}", binJs);
+            throw new FileNotFoundException($"找不到服务程序入口文件：{binJs}", binJs);
 
         var args = new StringBuilder();
         args.Append("src/bin.js serve");
@@ -72,6 +88,15 @@ public sealed partial class GatewayRunner : IDisposable
             StandardOutputEncoding = new UTF8Encoding(false),
             StandardErrorEncoding = new UTF8Encoding(false),
         };
+
+        // 把实例绑到指定的账号池上。
+        //
+        // 不设这个变量时，node 会读 ~/.workbuddy-api —— 也就是「默认池」。
+        // 设成 pools/<名> 之后，这一个实例看到的是另一整套账号，
+        // 和别的实例彻底隔离（各自的 activeId、各自的口保单）。
+        VaultHome = options.VaultHome;
+        if (!string.IsNullOrWhiteSpace(options.VaultHome))
+            psi.Environment["WORKBUDDY_API_HOME"] = options.VaultHome!;
 
         var ready = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 

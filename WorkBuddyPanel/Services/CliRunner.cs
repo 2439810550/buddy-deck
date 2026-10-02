@@ -18,8 +18,36 @@ public static class CliRunner
         string workingDirectory,
         string arguments,
         string? stdin = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? vaultHome = null)
     {
+        // 先检查文件在不在 —— 否则会抛一个英文的 Win32Exception：
+        //
+        //     An error occurred trying to start process '...' with working
+        //     directory '...'. 系统找不到指定的文件。
+        //
+        // 用户完全看不懂：哪个文件？为什么找不到？该怎么办？
+        // 实测就踩过：在「设置」里点了「恢复默认设置」，路径被重置成
+        // 「.\runtime\node.exe」（那是发布版的默认写法），而当前这个目录里
+        // 根本没有 runtime\ —— 之后每次操作账号都弹上面那段英文。
+        if (!File.Exists(nodePath))
+        {
+            throw new FileNotFoundException(
+                $"找不到运行环境程序。\n\n" +
+                $"程序要找的位置：\n{nodePath}\n\n" +
+                $"如果你用的是免安装版，那个文件应该在程序目录的 runtime 子目录里；\n" +
+                $"如果那个目录整个不见了，说明安装包解压不完整 —— 重新装一次。\n\n" +
+                $"或者到「设置」里点「自动探测」，让程序自己找本机的 Node。",
+                nodePath);
+        }
+
+        if (!Directory.Exists(workingDirectory))
+        {
+            throw new DirectoryNotFoundException(
+                $"找不到服务程序目录。\n\n程序要找的位置：\n{workingDirectory}\n\n" +
+                "到「设置」里点「自动探测」重新定位。");
+        }
+
         var psi = new ProcessStartInfo
         {
             FileName = nodePath,
@@ -34,6 +62,11 @@ public static class CliRunner
             StandardOutputEncoding = new UTF8Encoding(false),
             StandardErrorEncoding = new UTF8Encoding(false),
         };
+
+        // 指定账号池。workbuddy_api 靠这个环境变量决定读哪一份 accounts.cn.json，
+        // 所以它是「这条命令作用于哪个池」的唯一开关。
+        if (!string.IsNullOrWhiteSpace(vaultHome))
+            psi.Environment["WORKBUDDY_API_HOME"] = vaultHome;
 
         using var process = new Process { StartInfo = psi };
         var stdout = new StringBuilder();

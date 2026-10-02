@@ -31,9 +31,14 @@ import {
 } from "./upstream.js";
 import { beginSse, createModelResolver } from "./protocol.js";
 import { RateLimitTracker, describeRateLimit, isRateLimited, pickFallbackModel } from "./ratelimit.js";
+import { createHmac } from "node:crypto";
+import { MioraClient, MioraError } from "./miora.js";
+import { injectMediaTools, mediaTools } from "./media-tools.js";
+import { runAgentNonStreaming, runAgentStreaming } from "./agent.js";
 import * as anthropic from "./anthropic.js";
 import * as responses from "./responses.js";
 import { recordUsage } from "./usage.js";
+import { BUILD_ID, STARTED_AT, isStale } from "./build-id.js";
 
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
@@ -288,6 +293,40 @@ async function readJsonBody(req) {
  * @param {(...args: any[]) => void} [options.log]
  * @returns {{server: import("node:http").Server, listen: (port: number, host: string) => Promise<{port: number, host: string}>, close: () => Promise<void>}}
  */
+
+/**
+ * 给生成的文件名算个签名。
+ *
+ * 为什么要签名：图片端点如果要求 `Authorization` 头，用户把地址复制到
+ * 浏览器里就打不开（浏览器不会带那个头）—— 实测就是这个体验：
+ * 「图生成了，但找不到」。
+ *
+ * 但也不能完全敞开：那样任何人猜到文件名就能遍历。
+ *
+ * 所以把 API key 当 HMAC 密钥，给文件名签个名放进 URL：
+ *
+ *     /v1/images/file/<name>?s=<签名>
+ *
+ *   · 从 API 拿到 URL 的人（也就是有 key 的人）能直接打开
+ *   · 不知道 key 的人签不出来，遍历不了
+ *   · 同一个文件签名固定 → 浏览器/CDN 缓存友好
+ *
+ * apiKey 为空（网关没开鉴权）时返回空串，这时也不校验。
+ */
+function signName(name, apiKey) {
+  if (apiKey === "") return "";
+  return createHmac("sha256", apiKey).update(name).digest("hex").slice(0, 16);
+}
+
+/** 常量时间比较，避免时序侧信道。长度不同直接 false。 */
+function signatureMatches(expected, presented) {
+  if (typeof presented !== "string" || expected === "") return false;
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(presented, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
 export function createGateway(options) {
   const { client, store, catalog, variant } = options;
   const apiKey = options.apiKey ?? "";
@@ -305,6 +344,60 @@ export function createGateway(options) {
   //   1. 换一个模型接着发（用户完全无感）
   //   2. 把被拦的模型记进冷却表，窗口内不再拿它白试
   const rateLimits = new RateLimitTracker();
+
+  // Miora —— 生图/生视频服务。
+  //
+  // 为什么用惰性 credential 而不是启动时就取：账号可以在运行时切
+  // （多账号轮询、用户手动换号），每次调用现取才能跟上。
+  const miora = new MioraClient({
+    credential: () => store.resolve(),
+    workbuddyBase: variant.billingBase,
+    log,
+  });
+
+  // 提交过的视频任务。只是为了日志和「这个 id 是我们发的」的粗校验 ——
+  // 真正的状态永远以上游为准。
+  const videoTasks = new Map();
+
+  // 生图 / 生视频能力，作为**工具**注册给模型。
+  //
+  // ── 为什么不是关键词匹配 ──────────────────────────────
+  //
+  // 第一版是关键词：命中「画」「生成」就去生图。两个死穴：
+  //
+  //   ① 死板。「生成一个视频」命中「生成」→ 当生图处理，
+  //      用户要视频拿到图。补词表只能修一个个案。
+  //   ② 一接外挂客户端就废。那段代码前面有 !hasToolUse ——
+  //      一看客户端带了 tools 就跳过关键词。于是 Claude Code /
+  //      pi / DSH 里说「画一只猫」，模型只会回「我没办法直接画图」。
+  //
+  // 现在照 WorkBuddy 自己的做法（挖 app.asar 里那个 miora-mcp 插件）：
+  // 把工具注册给模型，**模型自己判断**该不该调、调哪个。
+  //
+  // 默认开。要关掉设 WORKBUDDY_MEDIA_TOOLS=0。
+  const mediaToolsEnabled = options.mediaTools !== false
+    && process.env.WORKBUDDY_MEDIA_TOOLS !== "0";
+
+  /**
+   * 把生成的文件名变成**完整可用**的 URL。
+   *
+   * 两件事：
+   *   ① 补上 host —— 以前只给 `/v1/images/file/xxx.png`，
+   *      用户粘到浏览器里打不开（不知道去哪台机器找）
+   *   ② 带上签名 —— 否则要 Authorization 头，浏览器不会带
+   *
+   * host 从进来的请求里取。这样反向代理（new-api 之类）转发过来时，
+   * 返回的也是代理那侧的地址，客户端照样能用。
+   *
+   * @param {import("node:http").IncomingMessage} req
+   * @param {string} file 文件名（内容哈希.扩展名）
+   */
+  function imageUrl(req, file) {
+    const host = req.headers.host ?? `127.0.0.1:${variant.port ?? 8787}`;
+    const signature = signName(file, apiKey);
+    const query = signature === "" ? "" : `?s=${signature}`;
+    return `http://${host}/v1/images/file/${file}${query}`;
+  }
 
   /**
    * 发一次上游请求；被限流就**换模型重试**。
@@ -368,10 +461,28 @@ export function createGateway(options) {
   });
 
   async function handle(req, res) {
-    const url = (req.url ?? "/").split("?")[0];
+    // 原始 URL（含查询串）—— 图片签名在 ?s= 里，不能把查询串切掉
+    const rawUrl = req.url ?? "/";
+    const url = rawUrl.split("?")[0];
 
     if (req.method === "GET" && (url === "/healthz" || url === "/healthz/")) {
-      writeJson(res, 200, { ok: true, provider: variant.id, models: catalog.base().length });
+      // buildId 是**这个进程启动时加载的代码**的指纹。
+      //
+      // 面板靠它判断「端口上那个网关是不是最新代码」——
+      // 这是真事引起的：8787 上跑着几小时前的孤儿进程，面板点
+      // 「启动网关」时只看到「有人在监听」就采用了它，于是改过的
+      // 代码不生效，表现成「功能还是旧的」。
+      //
+      // 另外报一个 stale：磁盘上的代码和正在跑的这份是不是同一个。
+      // 开发时改了文件但没重启服务就会不一样。
+      writeJson(res, 200, {
+        ok: true,
+        provider: variant.id,
+        models: catalog.base().length,
+        buildId: BUILD_ID,
+        startedAt: STARTED_AT,
+        stale: isStale(),
+      });
       return;
     }
 
@@ -383,7 +494,20 @@ export function createGateway(options) {
       return;
     }
 
-    if (apiKey !== "") {
+    // 图片端点允许用 URL 签名代替 Authorization 头。
+    //
+    // 为什么：用户在浏览器里直接打开图片时不会带那个头 ——
+    // 不特殊处理的话他看到的是 401，而不是图。
+    // 签名是用 API key 作为 HMAC 密钥算出来的，所以「能拿出有效签名」
+    // 等价于「知道 key」。安全性不降低，但可用性天壤之别。
+    const isSignedImageRequest = req.method === "GET"
+      && url.startsWith("/v1/images/file/")
+      && signatureMatches(
+        signName(url.slice("/v1/images/file/".length), apiKey),
+        new URL(rawUrl, "http://localhost").searchParams.get("s"),
+      );
+
+    if (apiKey !== "" && !isSignedImageRequest) {
       const presented = bearerOf(req);
       if (presented === undefined || !keyMatches(apiKey, presented)) {
         res.setHeader("WWW-Authenticate", 'Bearer realm="workbuddy-api"');
@@ -434,6 +558,50 @@ export function createGateway(options) {
       return;
     }
 
+    // ── 生图 ──────────────────────────────────────────────────
+    //
+    // 走 Miora（WorkBuddy 内置的生成服务），不是聊天模型。
+    // 接口按 OpenAI 规范做，这样 Cherry Studio / 各种画图面板
+    // 不用改任何代码就能用。
+    if (req.method === "POST" && (url === "/v1/images/generations" || url === "/v1/images/generations/")) {
+      await imagesGenerations(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && (url === "/v1/images/edits" || url === "/v1/images/edits/")) {
+      await imagesEdits(req, res);
+      return;
+    }
+
+    // ── 视频生成 ──────────────────────────────────────────────
+    //
+    // OpenAI 官方没有视频接口，业界主要有两种写法，这里都收：
+    //   /v1/video/generations   （跟 images 对称，更常见）
+    //   /v1/videos
+    if (req.method === "POST" &&
+        (url === "/v1/video/generations" || url === "/v1/video/generations/" ||
+         url === "/v1/videos" || url === "/v1/videos/")) {
+      await videoGenerations(req, res);
+      return;
+    }
+
+    // 视频是异步的（要渲染几百帧），另给一个查任务的端点，
+    // 免得客户端把 HTTP 连接一直挂着。
+    if (req.method === "GET" && url.startsWith("/v1/video/status/")) {
+      await videoStatus(req, res, url.slice("/v1/video/status/".length));
+      return;
+    }
+
+    // 网关自己存下来的生成结果。
+    //
+    // 为什么不让客户端直接用上游的签名 URL：那个 URL 1 小时失效，
+    // 客户端如果存下来晚点再看就打不开了。这里中转一层，永久可用。
+    // 注意：要放在 API key 校验**之前**处理签名 —— 见下面的说明。
+    if (req.method === "GET" && url.startsWith("/v1/images/file/")) {
+      await serveGeneratedFile(req, res, url.slice("/v1/images/file/".length), rawUrl);
+      return;
+    }
+
     writeOpenAIError(res, 404, "not_found", `no such route: ${req.method} ${url}`);
   }
 
@@ -477,17 +645,21 @@ export function createGateway(options) {
     const controller = new AbortController();
     req.on("close", () => controller.abort());
 
-    // 带换模型重试的发送：某个模型被限流时会自动换下一个，用户无感。
-    const { result, model: usedModel, attempts } = await sendWithFallback({
-      credential,
-      request,
-      model: ctx.model,
-      signal: controller.signal,
-      prepare: (body) => prepareBodyFor(variant, adapter.toChat(body, ctx)),
-      tag: `[${adapter.name}]`,
-    });
+    // 翻译一次的 Chat 请求 —— 两条路径都用它
+    const toChatOnce = () => adapter.toChat(request, ctx);
 
-    if (!result.ok) {
+    /** 把媒体工具注入到**已经翻译成 Chat 格式**的请求上。 */
+    const injectInto = (chatBody) => {
+      if (!mediaToolsEnabled) return chatBody;
+      const info = injectMediaTools(chatBody);
+      if (info.injected.length > 0) {
+        log(`[agent] 注入 ${info.injected.length} 个媒体工具：${info.injected.join(", ")}`);
+      }
+      return chatBody;
+    };
+
+    /** 一条失败路径：把上游的错误转成客户端协议的形状。 */
+    const failWith = (result, attempts) => {
       log(`[${adapter.name}] upstream ${result.kind} (http ${result.status}) 试过：${attempts.join(" → ") || "-"}`);
       const extra = attempts.length > 1 ? `（已试过 ${attempts.join(" → ")}）` : "";
       const shaped = adapter.error(
@@ -496,37 +668,140 @@ export function createGateway(options) {
         `workbuddy upstream ${result.kind} (http ${result.status}): ${result.message.slice(0, 400)}${extra}`,
       );
       writeJson(res, shaped.status, shaped.body);
+    };
+
+    // ── 关闭工具时的老路径：单发，不做循环 ──────────────────
+    if (!mediaToolsEnabled) {
+      const { result, model: usedModel, attempts } = await sendWithFallback({
+        credential,
+        request,
+        model: ctx.model,
+        signal: controller.signal,
+        prepare: (body) => prepareBodyFor(variant, adapter.toChat(body, ctx)),
+        tag: `[${adapter.name}]`,
+      });
+
+      if (!result.ok) {
+        failWith(result, attempts);
+        return;
+      }
+
+      // 回给客户端的模型名要用**实际用的那个** —— 换过模型的话，
+      // 不然日志和界面对不上，排查时会很迷惑。
+      ctx.model = usedModel;
+
+      if (!wantsStream) {
+        const completion = await collectChatCompletion(result.response);
+        writeJson(res, 200, adapter.fromCompletion(completion, ctx));
+        void recordUsage({
+          model: ctx.requestedModel, usedModel, kind: adapter.name, account: accountTag(credential),
+          usage: completion?.["usage"], outcome: "ok", attempts: attempts.length,
+          elapsedMs: Date.now() - startedAt,
+        });
+        return;
+      }
+
+      beginSse(res);
+      const writer = adapter.createStream(res, ctx);
+      try {
+        for await (const payload of iterateSseData(result.response.body)) {
+          if (payload === "[DONE]") break;
+          // 记账要用的 usage（含 credit）在 rename 之前先抠出来
+          captureUsage(payload);
+          writer.push(renameChunkModel(payload, usedModel));
+        }
+        writer.finish();
+        void recordUsage({
+          model: ctx.requestedModel, usedModel, kind: adapter.name, account: accountTag(credential),
+          usage: lastUsage, outcome: "ok", attempts: attempts.length,
+          elapsedMs: Date.now() - startedAt,
+        });
+        lastUsage = null;
+      } catch (error) {
+        log(`[${adapter.name}] stream failed mid-flight: ${String(error)}`);
+        writer.fail(error);
+      }
       return;
     }
 
-    // 回给客户端的模型名要用**实际用的那个** —— 换过模型的话，
-    // 不然日志和界面对不上，排查时会很迷惑。
-    ctx.model = usedModel;
+    // ── 开了工具：走 agent 循环 ────────────────────────────
+    //
+    // ⚠ 这里为什么不用 adapter.toChat 每次现翻译（踩过的坑）：
+    //
+    // agent 循环要往对话里追加 assistant(tool_calls) 和 tool 消息。
+    // 如果每轮都从**客户端的原始请求**重新翻译，那些追加的消息会被
+    // 丢掉 —— 因为客户端的 Anthropic/Responses 请求里根本没有它们。
+    //
+    // 所以：翻译**一次**，拿到 Chat 格式的请求，之后循环就在这一份上
+    // 追加。这也是为什么 chatCompletions 那条路径能正常工作 ——
+    // 它本来就是 Chat 格式，追加是直接的。
+    const chatRequest = injectInto(toChatOnce());
+
+    const sendRound = () => sendWithFallback({
+      credential,
+      request: chatRequest,
+      model: ctx.model,
+      signal: controller.signal,
+      prepare: (body) => prepareBodyFor(variant, body),
+      tag: `[${adapter.name}]`,
+    });
+
+    const agentCtx = {
+      request: chatRequest,
+      miora,
+      makeUrl: (file) => imageUrl(req, file),
+      log,
+      trackVideoTask: (taskId, model) => videoTasks.set(taskId, { createdAt: Date.now(), model: model ?? "" }),
+    };
+
+    const logRound = ({ round, calls, results }) => {
+      log(`[agent] 第 ${round} 轮执行 ${calls.length} 个工具：`
+        + calls.map((c, k) => `${c.function?.name}=${results[k]?.ok ? "ok" : "fail"}`).join(", "));
+    };
 
     if (!wantsStream) {
-      const completion = await collectChatCompletion(result.response);
-      writeJson(res, 200, adapter.fromCompletion(completion, ctx));
+      const outcome = await runAgentNonStreaming({ ...agentCtx, send: sendRound, onRound: logRound });
+
+      if (outcome.error !== undefined) {
+        failWith(outcome.error.result, outcome.error.attempts);
+        return;
+      }
+
+      writeJson(res, 200, adapter.fromCompletion(outcome.completion, ctx));
       void recordUsage({
-        model: ctx.requestedModel, usedModel, kind: adapter.name, account: accountTag(credential),
-        usage: completion?.["usage"], outcome: "ok", attempts: attempts.length,
+        model: ctx.requestedModel, usedModel: ctx.model, kind: adapter.name, account: accountTag(credential),
+        usage: outcome.completion?.["usage"], outcome: "ok", attempts: 1,
         elapsedMs: Date.now() - startedAt,
       });
       return;
     }
 
+    // 流式：agent 循环吐出来的是**上游原样的分片对象**，
+    // 要逐个交给 adapter 的 writer，让它转成客户端要的协议。
     beginSse(res);
     const writer = adapter.createStream(res, ctx);
+
     try {
-      for await (const payload of iterateSseData(result.response.body)) {
-        if (payload === "[DONE]") break;
-        // 记账要用的 usage（含 credit）在 rename 之前先抠出来
-        captureUsage(payload);
-        writer.push(renameChunkModel(payload, usedModel));
+      const outcome = await runAgentStreaming({
+        ...agentCtx,
+        send: sendRound,
+        emit: (chunk) => {
+          // renameChunkModel 收的是字符串，所以要序列化回去
+          writer.push(renameChunkModel(JSON.stringify(chunk), ctx.model));
+        },
+        keepalive: () => { if (!res.writableEnded) res.write(": keepalive\n\n"); },
+        onRound: logRound,
+      });
+
+      if (outcome.error !== undefined) {
+        writer.fail(new Error(`workbuddy upstream ${outcome.error.result?.kind ?? "error"}`));
+      } else {
+        writer.finish();
       }
-      writer.finish();
+
       void recordUsage({
-        model: ctx.requestedModel, usedModel, kind: adapter.name, account: accountTag(credential),
-        usage: lastUsage, outcome: "ok", attempts: attempts.length,
+        model: ctx.requestedModel, usedModel: ctx.model, kind: adapter.name, account: accountTag(credential),
+        usage: lastUsage, outcome: outcome.error === undefined ? "ok" : "failed", attempts: 1,
         elapsedMs: Date.now() - startedAt,
       });
       lastUsage = null;
@@ -534,6 +809,430 @@ export function createGateway(options) {
       log(`[${adapter.name}] stream failed mid-flight: ${String(error)}`);
       writer.fail(error);
     }
+  }
+
+
+  // ── 生图 / 改图 / 交付生成结果 ──────────────────────────────
+  //
+  // 三个函数对应上面三个路由。都按 OpenAI 的图片接口规范做，
+  // 这样客户端不用改代码。
+
+
+  /**
+   * POST /v1/video/generations
+   *
+   * 视频和图片有两个区别：
+   *
+   *   ① **慢**。图片通常 10-30 秒，视频要几分钟。所以这里默认
+   *      「提交就走」——立刻返回任务 id，客户端轮询查状态。
+   *      传 `wait: true` 才会一直等（最多 15 分钟）。
+   *
+   *   ② 参数多。duration / resolution / aspect_ratio，还有可选的
+   *      首尾帧、参考图。
+   *
+   * 请求体：
+   *   {
+   *     prompt,                    // 必填（首尾帧模式下可省）
+   *     mode?: "text" | "frame" | "reference",   // 默认 text
+   *     duration?, resolution?, aspect_ratio?,
+   *     first_frame_image?,        // mode=frame 时用
+   *     last_frame_image?,
+   *     references?: [图...],      // mode=reference 时用
+   *     wait?: boolean             // true = 等到底再返回
+   *   }
+   */
+  async function videoGenerations(req, res) {
+    const parsed = await readJsonBody(req);
+    if (!parsed.ok) {
+      writeOpenAIError(res, parsed.status, parsed.kind, parsed.message);
+      return;
+    }
+
+    const body = parsed.request ?? {};
+    const mode = typeof body.mode === "string" ? body.mode : "text";
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+
+    // prompt 在纯文生视频时必填；首尾帧/参考图模式可以只给图
+    if (prompt === "" && mode === "text") {
+      writeOpenAIError(res, 400, "invalid_request_error",
+        "mode=text 时 prompt 不能为空");
+      return;
+    }
+
+    // 组装上游要的 body
+    let upstreamBody;
+    if (mode === "frame") {
+      const first = resolveMedia(body.first_frame_image);
+      if (first === undefined) {
+        writeOpenAIError(res, 400, "invalid_request_error",
+          "mode=frame 时要给 first_frame_image");
+        return;
+      }
+      const input = { first_frame_image: first };
+      const last = resolveMedia(body.last_frame_image);
+      if (last !== undefined) input.last_frame_image = last;
+      upstreamBody = { input };
+    } else if (mode === "reference") {
+      const refs = Array.isArray(body.references) ? body.references : [];
+      const resolved = refs.map(resolveMedia).filter((r) => r !== undefined);
+      if (resolved.length === 0) {
+        writeOpenAIError(res, 400, "invalid_request_error",
+          "mode=reference 时 references 至少要有一张图");
+        return;
+      }
+      upstreamBody = { input: { reference_images: resolved } };
+    } else {
+      upstreamBody = {};
+    }
+
+    // 公共字段
+    if (prompt !== "") upstreamBody.prompt = prompt;
+    if (typeof body.duration === "number" && Number.isFinite(body.duration)) {
+      upstreamBody.duration = body.duration;
+    }
+    if (typeof body.resolution === "string" && body.resolution !== "") {
+      upstreamBody.resolution = body.resolution;
+    }
+    if (typeof body.aspect_ratio === "string" && body.aspect_ratio !== "") {
+      upstreamBody.aspect_ratio = body.aspect_ratio;
+    }
+
+    // 「提交就走」模式：立刻回一个任务 id，客户端自己轮询
+    if (body.wait !== true) {
+      try {
+        const key = await miora.getTempKey();
+        const submit = await miora.submitRaw("video", upstreamBody);
+        const taskId = submit?.upstreamTaskId;
+        if (typeof taskId !== "string" || taskId === "") {
+          writeOpenAIError(res, 502, "upstream_error", "上游没返回任务 id");
+          return;
+        }
+        videoTasks.set(taskId, { createdAt: Date.now(), model: submit.model ?? "" });
+        log(`[video] 任务已提交 ${taskId}，模型 ${submit.model ?? "?"}`);
+        writeJson(res, 200, {
+          id: taskId,
+          object: "video.generation",
+          created: Math.floor(Date.now() / 1000),
+          status: submit.status ?? "pending",
+          model: submit.model ?? "",
+          // 客户端可以拿这个查状态
+          status_url: `/v1/video/status/${taskId}`,
+        });
+      } catch (error) {
+        respondMioraError(res, error, "[video]");
+      }
+      return;
+    }
+
+    // 等待模式：一直轮询到完成
+    try {
+      const started = Date.now();
+      const result = await miora.submit("video", undefined, upstreamBody);
+      const files = result.files;
+      if (files.length === 0) {
+        writeOpenAIError(res, 502, "upstream_error",
+          result.errorMessage ?? "上游没有返回视频");
+        return;
+      }
+      const media = await miora.download(files[0].url);
+      log(`[video] 生成完成，耗时 ${Math.round((Date.now() - started) / 1000)}s`);
+      writeJson(res, 200, {
+        created: Math.floor(Date.now() / 1000),
+        data: [{ url: imageUrl(req, media.file) }],
+        model: result.model,
+      });
+    } catch (error) {
+      respondMioraError(res, error, "[video]");
+    }
+  }
+
+  /**
+   * GET /v1/video/status/<taskId>
+   *
+   * 查一个视频任务。完成后会把文件下载到本地，返回网关的 URL。
+   *
+   * 为什么在这里下载而不是让客户端自己取：上游给的是 1 小时过期的
+   * 腾讯云签名 URL，客户端可能过几小时才来看。
+   */
+  async function videoStatus(req, res, taskId) {
+    if (typeof taskId !== "string" || taskId === "") {
+      writeOpenAIError(res, 400, "invalid_request_error", "缺少任务 id");
+      return;
+    }
+
+    try {
+      const entry = await miora.query("video", taskId);
+      const status = entry?.status ?? "unknown";
+      const files = entry?.resultFiles ?? entry?.result_files ?? [];
+
+      const payload = {
+        id: taskId,
+        object: "video.generation",
+        status,
+        model: entry?.model ?? "",
+      };
+
+      if (status === "completed" && Array.isArray(files) && files.length > 0) {
+        const url = files[0].signedUrl ?? files[0].url;
+        if (typeof url === "string" && url !== "") {
+          const media = await miora.download(url);
+          payload.data = [{ url: imageUrl(req, media.file) }];
+        }
+      }
+
+      if (entry?.errorMessage) payload.error = { message: entry.errorMessage };
+
+      writeJson(res, 200, payload);
+    } catch (error) {
+      respondMioraError(res, error, "[video]");
+    }
+  }
+
+  /**
+   * 把一个「图片输入」规范化成 Miora 要的 media payload。
+   *
+   * 接受三种形态：
+   *   · https URL        → { url }
+   *   · data:image/...   → { base64 }
+   *   · 裸 base64        → { base64 }
+   *
+   * @returns {object|undefined} 给不出有效值就返回 undefined（调用方报 400）
+   */
+  function resolveMedia(input) {
+    if (typeof input !== "string" || input === "") return undefined;
+    if (input.startsWith("http://") || input.startsWith("https://")) return { url: input };
+    if (input.startsWith("data:")) {
+      const comma = input.indexOf(",");
+      if (comma < 0) return undefined;
+      return { base64: input.slice(comma + 1) };
+    }
+    return { base64: input };
+  }
+
+  /**
+   * POST /v1/images/generations
+   *
+   * 请求（OpenAI 规范）：
+   *   { prompt, model?, n?, size?, quality?, response_format? }
+   *
+   * 我们支持 response_format:
+   *   · "url"（默认）—— 返回网关自己的 URL（不过期）
+   *   · "b64_json"   —— 直接给 base64，客户端不用再请求一次
+   *
+   * `n > 1` 时并发提交多个任务 —— Miora 一次只生一张。
+   */
+  async function imagesGenerations(req, res) {
+    const parsed = await readJsonBody(req);
+    if (!parsed.ok) {
+      writeOpenAIError(res, parsed.status, parsed.kind, parsed.message);
+      return;
+    }
+
+    const body = parsed.request ?? {};
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    if (prompt === "") {
+      writeOpenAIError(res, 400, "invalid_request_error", "prompt 不能为空");
+      return;
+    }
+
+    // n：OpenAI 允许 1-10。上游一次一张，这里并发多跑几次。
+    const n = Number.isInteger(body.n) && body.n > 0 ? Math.min(body.n, 4) : 1;
+
+    const upstreamBody = { prompt };
+    if (typeof body.size === "string" && body.size !== "" && body.size !== "auto") {
+      upstreamBody.size = body.size;
+    }
+    if (typeof body.quality === "string" && body.quality !== "") {
+      upstreamBody.quality = body.quality;
+    }
+
+    const started = Date.now();
+    try {
+      const results = await Promise.all(
+        Array.from({ length: n }, () => miora.submit("image", "generate", upstreamBody)),
+      );
+
+      const files = results.flatMap((r) => r.files);
+      if (files.length === 0) {
+        const failed = results.find((r) => r.errorMessage);
+        writeOpenAIError(
+          res, 502, "upstream_error",
+          failed?.errorMessage ?? "上游没有返回图片",
+        );
+        return;
+      }
+
+      const wanted = body.response_format === "b64_json" ? "b64_json" : "url";
+      const data = await Promise.all(
+        files.map(async (f) => {
+          const media = await miora.download(f.url);
+          if (wanted === "b64_json") {
+            const { readFile } = await import("node:fs/promises");
+            const { join } = await import("node:path");
+            const buffer = await readFile(join(MioraClient.mediaDir(), media.file));
+            return { b64_json: buffer.toString("base64") };
+          }
+          return { url: imageUrl(req, media.file) };
+        }),
+      );
+
+      log(`[images] 生成 ${data.length} 张，耗时 ${Date.now() - started}ms，模型 ${results[0]?.model ?? "?"}`);
+      writeJson(res, 200, {
+        created: Math.floor(Date.now() / 1000),
+        data,
+      });
+    } catch (error) {
+      respondMioraError(res, error, "[images]");
+    }
+  }
+
+  /**
+   * POST /v1/images/edits
+   *
+   * OpenAI 规范里这是 multipart/form-data（带 image 文件）。
+   * 这里同时接受 JSON 形式 —— 因为很多客户端（尤其国内工具）
+   * 更愿意直接传 base64：
+   *
+   *   { image: "<base64 或 data URI 或 https URL>", prompt, size? }
+   */
+  async function imagesEdits(req, res) {
+    const parsed = await readJsonBody(req);
+    if (!parsed.ok) {
+      writeOpenAIError(res, parsed.status, parsed.kind, parsed.message);
+      return;
+    }
+
+    const body = parsed.request ?? {};
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    if (prompt === "") {
+      writeOpenAIError(res, 400, "invalid_request_error", "prompt 不能为空");
+      return;
+    }
+
+    const image = body.image ?? body.image_url;
+    if (typeof image !== "string" || image === "") {
+      writeOpenAIError(
+        res, 400, "invalid_request_error",
+        "要提供 image：可以是 https URL、data URI，或者裸 base64",
+      );
+      return;
+    }
+
+    // 组装 Miora 要的 media payload。
+    // 上游接受三种：base64 / url / file_key。这里按输入形态判断。
+    let media;
+    if (image.startsWith("http://") || image.startsWith("https://")) {
+      media = { url: image };
+    } else if (image.startsWith("data:")) {
+      const comma = image.indexOf(",");
+      if (comma < 0) {
+        writeOpenAIError(res, 400, "invalid_request_error", "data URI 格式不对");
+        return;
+      }
+      media = { base64: image.slice(comma + 1) };
+    } else {
+      media = { base64: image };
+    }
+
+    const upstreamBody = { prompt, images: [media] };
+    if (typeof body.size === "string" && body.size !== "" && body.size !== "auto") {
+      upstreamBody.size = body.size;
+    }
+
+    try {
+      const result = await miora.submit("image", "edit", upstreamBody);
+      const files = result.files;
+      if (files.length === 0) {
+        writeOpenAIError(res, 502, "upstream_error", result.errorMessage ?? "上游没有返回图片");
+        return;
+      }
+
+      const wanted = body.response_format === "b64_json" ? "b64_json" : "url";
+      const data = await Promise.all(
+        files.map(async (f) => {
+          const m = await miora.download(f.url);
+          if (wanted === "b64_json") {
+            const { readFile } = await import("node:fs/promises");
+            const { join } = await import("node:path");
+            const buffer = await readFile(join(MioraClient.mediaDir(), m.file));
+            return { b64_json: buffer.toString("base64") };
+          }
+          return { url: imageUrl(req, m.file) };
+        }),
+      );
+
+      log(`[images] 改图 ${data.length} 张，模型 ${result.model}`);
+      writeJson(res, 200, {
+        created: Math.floor(Date.now() / 1000),
+        data,
+      });
+    } catch (error) {
+      respondMioraError(res, error, "[images]");
+    }
+  }
+
+  /** GET /v1/images/file/<name> —— 把网关存下来的生成结果发回去。 */
+  async function serveGeneratedFile(req, res, name, rawUrl) {
+    // 只允许「哈希.扩展名」这种名字 —— 防止有人用 ../ 读别的文件
+    if (!/^[a-f0-9]{8,64}\.(png|jpg|jpeg|webp|mp4)$/i.test(name)) {
+      writeOpenAIError(res, 400, "invalid_request_error", "文件名不合法");
+      return;
+    }
+
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const file = join(MioraClient.mediaDir(), name);
+
+    try {
+      const buffer = await readFile(file);
+      const ext = name.split(".").pop().toLowerCase();
+      const mime = ext === "jpg" || ext === "jpeg" ? "image/jpeg"
+        : ext === "webp" ? "image/webp"
+        : ext === "mp4" ? "video/mp4"
+        : "image/png";
+      res.writeHead(200, {
+        "Content-Type": mime,
+        "Content-Length": buffer.length,
+        "Cache-Control": "public, max-age=31536000, immutable",
+      });
+      res.end(buffer);
+    } catch {
+      writeOpenAIError(res, 404, "not_found", "找不到这个文件（可能已被清理）");
+    }
+  }
+
+  /** 统一把 MioraError 转成 OpenAI 格式的错误响应。 */
+  function respondMioraError(res, error, tag) {
+    if (error instanceof MioraError) {
+      log(`${tag} ${error.code}: ${error.message}`);
+      writeOpenAIError(res, error.status, error.openaiType, error.message);
+      return;
+    }
+    log(`${tag} 未预期的错误: ${String(error)}`);
+    writeOpenAIError(res, 500, "internal_error", String(error?.message ?? error));
+  }
+
+
+  // ── 媒体工具相关的辅助函数 ──────────────────────────────
+
+  /**
+   * 请求里有没有图片输入。
+   *
+   * 为什么要看这个：用户传了图问「这是什么」，模型不该去调
+   * `workbuddy_generate_image` 重新画一张 —— 那是在讨论已有素材，
+   * 不是要新图。所以带图片输入的请求不注入媒体工具。
+   */
+  function hasImageContent(request) {
+    const messages = Array.isArray(request.messages) ? request.messages : [];
+    return messages.some((m) => {
+      if (!m || typeof m !== "object") return false;
+      const content = m.content;
+      if (Array.isArray(content)) {
+        return content.some((part) =>
+          part && typeof part === "object" && part.type === "image_url");
+      }
+      return false;
+    });
   }
 
   async function chatCompletions(req, res) {
@@ -561,7 +1260,24 @@ export function createGateway(options) {
     const startedAt = Date.now();
 
     const resolvedModel = resolveModel(request["model"]);
-    const { result, model: usedModel, attempts } = await sendWithFallback({
+
+    // ── 把生图 / 生视频注册成工具 ──────────────────────────
+    //
+    // 客户端没自带同名工具时才注入（不抢客户端的实现）。
+    // Claude Code / pi / DSH 本来就没有这些工具 —— 正好补上。
+    //
+    // request 是 readJsonBody 现解析出来的，每请求一份，直接改安全。
+    const injected = [];
+    if (mediaToolsEnabled && !hasImageContent(request)) {
+      const info = injectMediaTools(request);
+      injected.push(...info.injected);
+      if (injected.length > 0) {
+        log(`[agent] 注入 ${injected.length} 个媒体工具：${injected.join(", ")}`);
+      }
+    }
+
+    // 一轮发送。agent 循环要用同一个入口，所以包成函数。
+    const sendRound = () => sendWithFallback({
       credential,
       request,
       model: resolvedModel.model,
@@ -570,7 +1286,9 @@ export function createGateway(options) {
       tag: "",
     });
 
-    if (!result.ok) {
+    /** 把 agent 循环里的失败变成客户端能读的错误。 */
+    const failWith = (round) => {
+      const { result, attempts } = round;
       log(`upstream ${result.kind} (http ${result.status}) 试过：${attempts.join(" → ") || "-"}`);
       const extra = attempts.length > 1 ? `（已试过 ${attempts.join(" → ")}）` : "";
       writeOpenAIError(
@@ -579,24 +1297,45 @@ export function createGateway(options) {
         result.kind,
         `workbuddy upstream ${result.kind} (http ${result.status}): ${result.message.slice(0, 400)}${extra}`,
       );
-      return;
-    }
+    };
 
+    const agentCtx = {
+      request,
+      miora,
+      makeUrl: (file) => imageUrl(req, file),
+      log,
+      trackVideoTask: (taskId, model) => videoTasks.set(taskId, { createdAt: Date.now(), model: model ?? "" }),
+    };
+
+    const logRound = ({ round, calls, results }) => {
+      log(`[agent] 第 ${round} 轮执行 ${calls.length} 个工具：`
+        + calls.map((c, k) => `${c.function?.name}=${results[k]?.ok ? "ok" : "fail"}`).join(", "));
+    };
+
+    // ── 非流式 ────────────────────────────────────────────
     if (!wantsStream) {
-      const completion = await collectChatCompletion(result.response);
+      const outcome = await runAgentNonStreaming({ ...agentCtx, send: sendRound, onRound: logRound });
+
+      if (outcome.error !== undefined) {
+        failWith(outcome.error);
+        return;
+      }
+
+      const completion = outcome.completion;
       // 换过模型时，把响应的 model 字段改成实际用的那个
-      if (typeof completion === "object" && completion !== null && usedModel !== undefined) {
-        completion["model"] = usedModel;
+      if (typeof completion === "object" && completion !== null) {
+        completion["model"] = resolvedModel.model;
       }
       writeJson(res, 200, completion);
       void recordUsage({
-        model: requestedModel, usedModel, kind: "chat", account: accountTag(credential),
-        usage: completion?.["usage"], outcome: "ok", attempts: attempts.length,
+        model: requestedModel, usedModel: resolvedModel.model, kind: "chat", account: accountTag(credential),
+        usage: completion?.["usage"], outcome: "ok", attempts: 1,
         elapsedMs: Date.now() - startedAt,
       });
       return;
     }
 
+    // ── 流式 ──────────────────────────────────────────────
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -605,21 +1344,50 @@ export function createGateway(options) {
     });
     res.flushHeaders?.();
 
+    // 写一个 delta 分片。过 sanitizeChunk（洗掉上游那些会骗到严格客户端的
+    // 字段）和 renameChunkModel（换过模型时改名字）。
+    const writeChunk = (chunk) => {
+      if (res.writableEnded) return;
+      const payload = JSON.stringify(chunk);
+      captureUsage(payload);
+      const sanitized = sanitizeChunk(renameChunkModel(payload, resolvedModel.model));
+      if (sanitized === undefined) return;
+      res.write(`data: ${sanitized}\n\n`);
+    };
+
+    // 工具执行期间保活。SSE 注释行，客户端按规范会忽略。
+    const writeKeepalive = () => {
+      if (res.writableEnded) return;
+      res.write(": keepalive\n\n");
+    };
+
     try {
-      for await (const payload of iterateSseData(result.response.body)) {
-        if (payload === "[DONE]") {
-          res.write("data: [DONE]\n\n");
-          break;
+      const outcome = await runAgentStreaming({
+        ...agentCtx,
+        send: sendRound,
+        emit: writeChunk,
+        keepalive: writeKeepalive,
+        onRound: logRound,
+      });
+
+      if (outcome.error !== undefined) {
+        log(`[agent] 流中断：${outcome.error.result?.kind ?? "?"}`);
+        if (!res.writableEnded) {
+          // 头已经发出去了，不能改状态码 —— 用 SSE 事件报错
+          const shaped = {
+            error: {
+              message: `workbuddy upstream ${outcome.error.result?.kind ?? "error"}`,
+              type: outcome.error.result?.kind ?? "upstream_error",
+            },
+          };
+          res.write(`data: ${JSON.stringify(shaped)}\n\n`);
         }
-        // 记账要的 usage（含上游的 credit）在 sanitize 丢掉之前先抠一份
-        captureUsage(payload);
-        const sanitized = sanitizeChunk(renameChunkModel(payload, usedModel));
-        if (sanitized === undefined) continue;
-        res.write(`data: ${sanitized}\n\n`);
       }
+
+      if (!res.writableEnded) res.write("data: [DONE]\n\n");
       void recordUsage({
-        model: requestedModel, usedModel, kind: "chat", account: accountTag(credential),
-        usage: lastUsage, outcome: "ok", attempts: attempts.length,
+        model: requestedModel, usedModel: resolvedModel.model, kind: "chat", account: accountTag(credential),
+        usage: lastUsage, outcome: outcome.error === undefined ? "ok" : "failed", attempts: 1,
         elapsedMs: Date.now() - startedAt,
       });
       lastUsage = null;
@@ -630,8 +1398,8 @@ export function createGateway(options) {
         res.write("data: [DONE]\n\n");
       }
       void recordUsage({
-        model: requestedModel, usedModel, kind: "chat", account: accountTag(credential),
-        usage: lastUsage, outcome: "failed", attempts: attempts.length,
+        model: requestedModel, usedModel: resolvedModel.model, kind: "chat", account: accountTag(credential),
+        usage: lastUsage, outcome: "failed", attempts: 1,
         elapsedMs: Date.now() - startedAt,
       });
       lastUsage = null;

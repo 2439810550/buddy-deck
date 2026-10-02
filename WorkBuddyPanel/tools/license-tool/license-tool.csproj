@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    发卡工具（图形界面）：你自己用的，不要发出去。
+
+    它持有私钥，能签出任何授权。私钥泄露 = 整套授权失效。
+
+    和 tools/make-license（命令行版）的区别：
+      - 命令行版适合批量、适合脚本调用
+      - 这个适合手工发卡：贴机器码、填名字、点一下就出文件
+    两个共用同一套密钥和签名逻辑，签出来的授权文件完全一样。
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>发卡工具</AssemblyName>
+    <RootNamespace>LicenseTool</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Standard.Licensing" Version="1.3.0" />
+  </ItemGroup>
+
+</Project>

@@ -109,6 +109,179 @@ src/anthropic.js   Anthropic Messages ←→ Chat（含 tool_use 双向、count_
 src/responses.js   OpenAI Responses ←→ Chat（含 output item 的事件流顺序）
 ```
 
+## 画图端点（OpenAI 图片接口）
+
+网关不只转发聊天 —— **还能画图**。
+
+```
+POST /v1/images/generations     文生图
+POST /v1/images/edits           改图 / 图生图
+GET  /v1/images/file/<name>     取回生成结果
+```
+
+按 OpenAI 的图片接口规范做，所以 Cherry Studio、各种画图面板、
+自己写的脚本都不用改代码。
+
+### 用法
+
+```bash
+curl http://127.0.0.1:8787/v1/images/generations \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"一只戴墨镜的橘猫，扁平插画风格","size":"1024x1024"}'
+```
+
+```json
+{
+  "created": 1790872167,
+  "data": [{ "url": "/v1/images/file/22c241711fec596ca8900aa8.png" }]
+}
+```
+
+拿到的 `url` 是**网关自己的路径** —— 拼上 base_url 就能取图：
+
+```bash
+curl http://127.0.0.1:8787/v1/images/file/22c241711fec596ca8900aa8.png \
+  -H "Authorization: Bearer $KEY" -o cat.png
+```
+
+### 请求参数
+
+| 字段 | 说明 |
+|---|---|
+| `prompt` | **必填**。描述文字 |
+| `size` | 可选，如 `1024x1024` / `1024x1536` / `1536x1024` |
+| `n` | 可选，要几张（1-4）。上游一次一张，这里并发多跑几次 |
+| `response_format` | `url`（默认，给网关路径）或 `b64_json`（直接给 base64） |
+| `quality` | 可选，透传给上游 |
+
+改图 `POST /v1/images/edits` 多一个字段：
+
+| 字段 | 说明 |
+|---|---|
+| `image` | **必填**。可以是 https URL、`data:image/png;base64,...`，或者裸 base64 |
+
+### 它走的是哪条路
+
+**不是聊天模型。** WorkBuddy 把生成能力做成了独立的服务（内部叫 Miora），
+域名 `public.miora.qq.com`。链路：
+
+```
+网关
+  ↓ 用保险库里的登录 JWT
+POST https://www.codebuddy.cn/v2/api-keys     换一个 15 分钟的临时凭据
+  ↓
+POST https://public.miora.qq.com/api/ai/workbuddy-proxy/image/generate/submit
+  ↓
+{model: "hy-image-3.5-wb", status: "completed", resultFiles: [{signedUrl}]}
+  ↓ 下载下来存本地（上游给的是 1 小时失效的签名 URL）
+GET /v1/images/file/<hash>.png                客户端随时来取
+```
+
+代码在 `src/miora.js`。临时凭据有缓存（同一个账号复用，切号自动重取，
+上游说失效会自动重取一次）。
+
+## 聊天里直接生图 / 生视频（工具调用）
+
+**跟模型说「画一只猫」就会出图**，不用调上面那个端点。
+
+而且 —— **四种协议都支持**。不管客户端走哪条路，接上就能生图：
+
+| 协议 | 端点 | 谁在用 |
+|---|---|---|
+| OpenAI Chat | `POST /v1/chat/completions` | pi、Cherry Studio、各种面板 |
+| Anthropic Messages | `POST /v1/messages` | Claude Code |
+| OpenAI Responses | `POST /v1/responses` | Codex |
+| 面板自带的对话 | 走 Chat | WorkBuddy 控制台 |
+
+> **踩过的坑**：第一版只在 Chat 那条路注入了工具。结果 Claude Code 说
+> 「画一只企鹅」模型回「我无法直接绘制图片」，Codex 说「画一个蓝色三角形」
+> 它写了段 SVG 代码 —— 因为 Anthropic / Responses 共用的 `translated()`
+> 里忘了加。现在 `verify.mjs` 有一节专门盯这个（三条协议各测一遍）。
+
+### 怎么做的
+
+第一版这里写的是**关键词匹配**：命中「画」「生成」就去生图。两个死穴：
+
+* **死板**。「生成一个视频」命中「生成」，被当成生图处理 ——
+  用户要视频拿到一张图。补词表只能修一个个案，修不了面。
+* **一接外挂客户端就废**。那段代码前面有个 `!hasToolUse(request)` 判断 ——
+  一看客户端带了 tools 就跳过关键词。于是 Claude Code 里说「画一只猫」，
+  模型只会回「我没办法直接画图哦」。
+
+现在照 **WorkBuddy 自己的做法**（挖 `app.asar` 里那个 `miora-mcp` 插件看出来的）：
+把生成能力做成**工具**注册给模型，**模型自己判断**该不该调、调哪个。
+
+```
+客户端发请求
+  ↓ 网关注入 4 个工具（客户端没自带同名工具时）
+     workbuddy_generate_image      文生图
+     workbuddy_edit_image          改图 / 图生图
+     workbuddy_generate_video      文生视频
+     workbuddy_image_to_video      图生视频（可带尾帧）
+  ↓ 模型回 tool_calls
+  ↓ **网关自己执行**（只有网关拿着 Miora 的凭证）
+  ↓ 结果作为 role:"tool" 消息回填
+  ↓ 带新对话再问一次模型
+  ↓ 模型给出带图片 markdown 的最终答复
+客户端拿到的就是一次普通的聊天回复
+```
+
+**为什么必须网关执行**：Claude Code 不认识 `workbuddy_generate_image`，
+交给它也没用。这条只有网关能走。
+
+### 几个关键取舍
+
+**流式下先缓冲再决定。** 模型可能先说「好的我来画」**然后**才发 tool_calls。
+等看到 tool_calls 时那半句已经写给客户端了，而客户端已经把前半句渲染出来了，
+后面的工具结果插不进去。所以网关**先攒着不急着往外写**：攒够 40 个字符
+或流结束才放行；这期间发现是调我们的工具就整轮丢掉，只给最终的干净答复。
+
+**工具执行期间保活。** 生图要 10~30 秒，一个字节都不发。有些客户端有 30 秒
+空闲超时。所以执行期间每 10 秒发一个 SSE 注释行（`: keepalive`）。
+
+**客户端的工具原样交回。** 只有 `workbuddy_` 前缀的工具网关执行。
+客户端自己的（`Read` / `Bash` / `get_weather`）原样返回，让它自己跑 ——
+标准 OpenAI 流程。*（踩过：非流式路径一开始没做这个区分，客户端调
+`get_weather` 结果模型收到「未知工具」，回了一句「天气工具好像不可用」，
+用户看到一切正常，只是永远查不出数据。）*
+
+**视频提交就走。** 图片等 10~30 秒没问题，视频要几分钟，等下去客户端早超时了。
+所以视频工具返回 taskId + 查询地址，让模型转告用户。
+
+### 关掉
+
+想让它老老实实当个纯聊天网关：
+
+```bash
+WORKBUDDY_MEDIA_TOOLS=0
+```
+
+### 实测
+
+```
+scripts/test-agent.mjs         117 项协议测试（假上游，零成本、可重复）
+scripts/test-tool-intent.mjs   真的问模型「要不要调工具」（会生图，花钱）
+
+  node scripts/test-tool-intent.mjs          免费用例 + 2 条生图
+  node scripts/test-tool-intent.mjs --all    全跑（8 条生图）
+  node scripts/test-tool-intent.mjs --video  再加视频（慢）
+```
+
+意图测试里「不该调」的用例占多数 —— 它们才是防误判的关键。
+**漏判只是用户再说一次，误判会白花额度还答非所问。**
+
+### 生成的文件放哪
+
+```
+~/.workbuddy-api/media/<内容哈希>.png
+```
+
+文件名是内容的 SHA256 前 24 位 —— **同一张图重复下载会覆盖，不会越积越多**。
+权限 0600（和账号保险库一致）。
+
+想清空直接删这个目录。
+
 ### 模型别名（重要）
 
 Claude Code 会报 `claude-sonnet-4-5-20250929`，Codex 会报 `gpt-5.6-sol`，
@@ -361,6 +534,7 @@ node src/bin.js config --set authFile="D:\path\to\workbuddy-desktop.info"
 | `WORKBUDDY_AUTH_FILE` | 国内版 App 登录文件的显式路径 |
 | `WORKBUDDY_AI_AUTH_FILE` | 国际版 App 登录文件的显式路径 |
 | `WORKBUDDY_ELECTRON_BIN` | App 5.6+ 加密凭据的 key helper 二进制（探测不到时指定） |
+| `WORKBUDDY_MEDIA_TOOLS` | 设 `0` 关掉聊天里的生图/生视频工具（变回纯聊天网关） |
 
 登录文件的默认探测位置（按顺序）：
 
@@ -542,6 +716,58 @@ WORKBUDDY_ELECTRON_BIN="D:\sqsoftware\workbuddy\WorkBuddy.exe" node src/bin.js d
 
 ---
 
+## 网关进程的版本识别（`/healthz` 的 `buildId`）
+
+`GET /healthz` 除了 `ok` 还回三个字段：
+
+```json
+{
+  "ok": true,
+  "provider": "workbuddy",
+  "models": 16,
+  "buildId": "b32cf0a26cab",
+  "startedAt": "2026-10-02T00:34:18.894Z",
+  "stale": false
+}
+```
+
+**`buildId` 是这个进程启动时加载的代码的指纹**（`src/` 下所有 .js 的
+mtime + 大小做 SHA-256，取前 12 位）。
+
+### 为什么需要它
+
+真实事故：
+
+```
+8787 上跑着几小时前启动的网关（孤儿进程，父面板已退出）。
+代码后来改了好几轮 —— 视频从「当成生图处理」改成了真正的视频生成。
+但那个进程不会自动重载，它还在跑旧代码。
+
+用户重启面板 → 面板看到「端口上有人在监听」→ 采用它
+→ 功能还是旧的。用户看到的是「视频还是生成不了」，
+完全不知道为什么，排查方向全跑偏。
+```
+
+现在控制台启动时会拿它的 `buildId` 跟磁盘上的代码比对，
+**不一样就自动把旧网关换掉**（`ProcessReaper` 做三重匹配之后才动手：
+`node.exe` + `bin.js serve` + `--port N`，任何一条对不上就不碰）。
+
+### 为什么不用 git commit 当版本
+
+- 用户机器上可能没有 git
+- 也可能不是 git 仓库（解压安装的场景）
+- 而且「工作区有未提交改动」时 git 反映不出来 —— 但代码确实变了
+
+mtime + 大小已经足够区分「代码变了没有」。
+
+### `stale` 字段
+
+磁盘上的代码和正在跑的这份是不是同一个。开发时改了文件但没重启
+服务就会是 `true`。面板不只看 `buildId` 比较，也看这个 —— 因为
+指纹比较在极端情况下（改了文件又改回来）可能一致。
+
+---
+
 ## 已知限制
 
 - **国际版（WorkBuddy AI）代码就绪但未实测**——开发机只装了国内版。国际版走
@@ -551,6 +777,17 @@ WORKBUDDY_ELECTRON_BIN="D:\sqsoftware\workbuddy\WorkBuddy.exe" node src/bin.js d
 - **企业账号计费未实测**——开发机为个人账号。
 - **`status` 在加密凭据下不显示昵称**——5.6+ 把 `nickname` 也加密了，本工具
   只解密发请求必需的 token 字段，不解密个人信息。
+- **生图/生视频依赖模型判断该不该调工具**——不像关键词匹配那样确定。
+  实测 14 条常见说法全对（含 12 条「不该调」的），但模型判断本身有波动。
+  测法见 `scripts/test-tool-intent.mjs`。漏判只是用户再说一次；误判会白花
+  额度，所以工具的 description 里写了大量排除条款。
+- **混合同轮调用时只认一边**——如果模型在同一轮里既调我们的生图工具、
+  又调客户端的工具（`Read` / `Bash` 之类），网关只执行我们那个，其余
+  给一条说明性回复。因为网关没法替客户端执行本地工具，而客户端不认识
+  我们的工具。实际很少见，遇到会在日志里记一条。
+- **流式首字节有延迟**——为了处理「先说话后调工具」，网关要缓冲约 40
+  个字符才放行。正常聊天感觉不到（模型很快超过 40 字），但极短的回复
+  会晚一点出现。
 
 ---
 

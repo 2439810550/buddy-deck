@@ -51,3 +51,32 @@ BuddyDeckHub/
 
 # new-api 试用目录（132MB 二进制 + 运行时数据，含真 key）
 _newapi/
+
+# 临时截图
+_panel.png
+_pub.png
+_shot*.png
+
+# 临时截图
+_na.png
+_bd.png
+
+# 临时截图
+_ui.png
+_pub.png
+
+# 反代调研（临时克隆，不入库）
+_trae/
+_agent2/
+_traetest/
+_ui*.png
+
+# 测试方法论调研（临时克隆）
+_qa/
+
+# 测试项目的构建产物
+WorkBuddyPanel/tests/**/obj/
+WorkBuddyPanel/tests/**/bin/
+
+# DeepSeek Harness 官方仓库（调研用，临时克隆）
+_dsh/

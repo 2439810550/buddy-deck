@@ -3,3 +3,19 @@ obj/
 publish/
 .cache/
 *.user
+
+# ── 授权 ──
+# 私钥绝不进库：拿到它就能自己签授权，整套方案就废了。
+# public.key 可以进（公钥本来就是公开的，作用是验证）。
+keys/private.key
+
+# 签出来的授权文件（含用户姓名，属于个人信息）
+*.lic
+
+# 发卡工具的密钥（现在默认在 %USERPROFILE%\.workbuddy-license\，
+# 这个规则是防万一有人手工拷到项目目录里）
+.workbuddy-license/
+
+# 发卡工具的发布产物（138MB，自己 dotnet publish 就能出）
+# 源码在 tools/license-tool/，产物不进库
+发卡工具/

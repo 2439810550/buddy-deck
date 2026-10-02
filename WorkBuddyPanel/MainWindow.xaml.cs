@@ -68,6 +68,12 @@ public partial class MainWindow : Window
             // 刚切过来先刷一次，不用等一个周期
             if (_onAccountsTab) _ = _vm.RefreshAccountsLightAsync();
         };
+
+        // 分池页点「管理账号」时，把标签页切到账号页。
+        //
+        // 不切的话：数据源确实换了，但用户还站在分池页，看不到任何变化 ——
+        // 会以为按钮坏了（实测就是这个观感）。
+        _vm.RequestAccountsTab += () => MainTabs.SelectedIndex = AccountsTabIndex;
     }
 
     /// <summary>「账号」标签页的下标。加页时跟着调。</summary>
@@ -178,7 +184,7 @@ public partial class MainWindow : Window
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "选择 node.exe",
+            Title = "选择运行环境程序",
             Filter = "可执行文件 (*.exe)|*.exe|所有文件 (*.*)|*.*",
             CheckFileExists = true,
         };
@@ -191,7 +197,7 @@ public partial class MainWindow : Window
     {
         var dialog = new Microsoft.Win32.OpenFolderDialog
         {
-            Title = "选择 workbuddy_api 目录（里面应该有 src\\bin.js）",
+            Title = "选择服务程序目录",
         };
 
         if (dialog.ShowDialog(this) != true) return;
@@ -203,7 +209,7 @@ public partial class MainWindow : Window
             if (found is null)
             {
                 MessageBox.Show(
-                    $"这个目录里找不到 src\\bin.js：\n{picked}\n\n请选 workbuddy_api 的根目录。",
+                    $"这个目录里不是服务程序：\n{picked}\n\n请选包含服务程序的目录。",
                     "WorkBuddy 控制台",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);

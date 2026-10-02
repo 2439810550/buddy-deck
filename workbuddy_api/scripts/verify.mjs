@@ -338,6 +338,100 @@ async function main() {
     }
   }
 
+  section("Media tools are injected on every protocol");
+  {
+    // 这一节是**回归测试**，防的是「只在 chat 那条路注入工具」这个 bug。
+    //
+    // 症状：Claude Code（走 /v1/messages）说「画一只猫」，
+    // 模型回「我无法直接绘制图片」；Codex（走 /v1/responses）写一段
+    // SVG 代码。而 OpenAI Chat 那条路是好的 —— 因为注入只写在
+    // chatCompletions 里，Anthropic / Responses 共用的 translated()
+    // 忘了加。
+    //
+    // 这里不真的生图（那要花钱），只看**模型会不会去调我们的工具** ——
+    // 调了就说明工具确实注入进去了。
+    //
+    // 判据：模型回复里提到工具名，或者直接返回了生图结果的 markdown。
+    const prompt = "画一只戴墨镜的橘猫";
+
+    // ① Anthropic Messages
+    {
+      const r = await fetch(`${base}/messages`, {
+        method: "POST",
+        headers: { ...authHeaders, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({
+          model: modelId,
+          max_tokens: 2048,
+          messages: [{ role: "user", content: prompt }],
+          tools: [{ name: "Read", description: "read a file", input_schema: { type: "object", properties: {} } }],
+        }),
+      });
+      check("Anthropic /v1/messages responds", r.ok, `got ${r.status}`);
+      if (r.ok) {
+        const body = await r.json();
+        const text = (body.content ?? [])
+          .filter((b) => b.type === "text")
+          .map((b) => b.text ?? "")
+          .join("");
+        check(
+          "Anthropic path can generate images (media tools injected)",
+          text.includes("![") || text.includes("workbuddy_"),
+          `reply: ${text.slice(0, 120)}`,
+        );
+      }
+    }
+
+    // ② OpenAI Responses
+    {
+      const r = await fetch(`${base}/responses`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          model: modelId,
+          stream: false,
+          input: prompt,
+          tools: [{ type: "function", name: "Read", description: "read a file", parameters: { type: "object", properties: {} } }],
+        }),
+      });
+      check("Responses /v1/responses responds", r.ok, `got ${r.status}`);
+      if (r.ok) {
+        const body = await r.json();
+        const text = (body.output ?? [])
+          .filter((item) => item.type === "message")
+          .flatMap((item) => item.content ?? [])
+          .filter((c) => c.type === "output_text")
+          .map((c) => c.text ?? "")
+          .join("");
+        check(
+          "Responses path can generate images (media tools injected)",
+          text.includes("![") || text.includes("workbuddy_"),
+          `reply: ${text.slice(0, 120)}`,
+        );
+      }
+    }
+
+    // ③ 客户端自己的工具必须原样返回（不能被网关吃掉）
+    {
+      const r = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          model: modelId,
+          stream: false,
+          messages: [{ role: "user", content: "What is the weather in Beijing? Use the get_weather tool." }],
+          tools: [weatherTool],
+        }),
+      });
+      const body = await r.json();
+      const calls = body.choices?.[0]?.message?.tool_calls ?? [];
+      check(
+        "client's own tool comes back untouched",
+        calls.length > 0 && calls[0].function.name === "get_weather",
+        calls.length === 0 ? "no tool_calls returned" : `got ${calls[0].function.name}`,
+      );
+    }
+  }
+
   section("State isolation");
   {
     const { readdir } = await import("node:fs/promises");

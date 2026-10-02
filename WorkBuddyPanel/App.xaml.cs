@@ -8,8 +8,29 @@ namespace WorkBuddyPanel;
 
 public partial class App : Application
 {
-    private const string MutexName = @"Local\WorkBuddyPanel.SingleInstance";
-    private const string ShowSignalName = @"Local\WorkBuddyPanel.ShowWindow";
+    /// <summary>
+    /// 单实例锁的名字。
+    ///
+    /// 名字里带 exe 路径的哈希 —— 为什么：
+    ///   绝对路径不同的两个实例应当能同时跑。
+    ///   实际场景：用户在 D:\BuddyDeck 装着正式版（长期开着、网关挂在它身上），
+    ///   同时又想跑一下刚编的新版试试 —— 固定名字的锁会让后者直接把前者
+    ///   叫出来然后自己退出，根本测不了。
+    ///
+    /// 同一个 exe 双开仍然会被拦（那是原本要防的：两个实例抢同一个端口）。
+    /// </summary>
+    private static readonly string MutexName = BuildInstanceName("SingleInstance");
+
+    private static readonly string ShowSignalName = BuildInstanceName("ShowWindow");
+
+    private static string BuildInstanceName(string kind)
+    {
+        var path = Environment.ProcessPath ?? "default";
+        var hash = 0;
+        foreach (var ch in path.ToLowerInvariant())
+            hash = (hash * 31 + ch) & 0x7FFFFFFF;
+        return string.Format(@"Local\WorkBuddyPanel.{0}.{1:X}", kind, hash);
+    }
 
     private MainWindow? _window;
     private TrayIcon? _tray;
@@ -61,9 +82,48 @@ public partial class App : Application
         // 这个坑真踩到了 —— 现在仍然保留了第二层保险（已有实例会补跑维护）。
         if (MaintainOnly)
         {
+            // 维护模式也校验授权。
+            //
+            // 为什么：不校验的话，删掉授权文件后计划任务照样每天续期签到 ——
+            // 那是我们自己的账号，等于给人白用工信。
+            //
+            // 但失败时**静默退出（退出码 1）**，不弹窗：
+            // 这是计划任务拉起来的，屏幕前没人，弹窗只会挂着不走。
+            var gate = LicenseGuard.Verify();
+            if (!gate.Ok)
+            {
+                MainViewModel.WriteMaintenanceLog(
+                    $"[授权] {gate.FailReason}：{gate.Message.Replace(Environment.NewLine, " ")}");
+                Shutdown(1);
+                return;
+            }
+
             RunMaintenanceOnly();
             return;
         }
+
+        // 授权校验：插在 --maintain 之后、单实例之前。
+        //
+        // 时机考虑：
+        //   在单实例之前 —— 没授权就别抢那个互斥量，否则第二次双击的行为会很怪
+        //                        （没授权的实例把已授权的窗口叫出来）
+        //   在 --maintain 之后 —— 那个分支自己处理，见上面
+        var license = LicenseGuard.Verify();
+        if (!license.Ok)
+        {
+            // 弹激活窗：告诉用户机器码 + 文件放哪 + 可重试
+            var activation = new ActivationWindow(license);
+            if (activation.ShowDialog() != true)
+            {
+                Shutdown(1);
+                return;
+            }
+            license = activation.Passed!;
+        }
+
+        MainViewModel.WriteMaintenanceLog(
+            $"[授权] 通过 —— 授权给 {license.CustomerName}，到期 " +
+            (license.ExpiresAt is { } exp && exp != default ? $"{exp:yyyy-MM-dd}" : "永久"));
 
         // 单实例：程序大部分时间躲在托盘里，用户很容易忘了它还在，
         // 再双击一次 exe 就会撞端口。这里让第二个实例把第一个的窗口叫出来，然后自己退。
@@ -108,7 +168,35 @@ public partial class App : Application
 
         if (!StartHidden && !MaintainOnly) _window.Show();
 
-        _ = _window.StartAsync(StartHidden || MaintainOnly);
+        // 启动流程的异常不能丢。
+        //
+        // 以前是 `_ = _window.StartAsync(...)` —— fire-and-forget，
+        // InitializeAsync 里任何异常都被静默吞掉。
+        //
+        // 表现很迷惑：窗口出来了，但账号列表永远空着、日志页什么都没有 ——
+        // 因为初始化在抛异常那一步就停了，而用户（和开发者）都看不到错。
+        // 实测就是这么晴掉的：一个异常导致账号列表一直加载不出来。
+        _ = StartAsyncSafely();
+    }
+
+    private async Task StartAsyncSafely()
+    {
+        try
+        {
+            await _window!.StartAsync(StartHidden || MaintainOnly);
+        }
+        catch (Exception ex)
+        {
+            // 记完整堆栈 —— 只记 Message 的话看不出是哪一行、哪个线程
+            MainViewModel.WriteMaintenanceLog("[启动异常] " + ex);
+            try { _window?.ViewModel.AppendExternalLog($"[启动] 失败：{ex.Message}\n{ex.StackTrace}"); } catch { }
+
+            MessageBox.Show(
+                $"程序启动时出错了：\n\n{ex.Message}\n\n" +
+                "详情已经写进日志（「日志」标签页、或 %APPDATA%\\WorkBuddyPanel\\ui.log）。",
+                "WorkBuddy 控制台 — 启动失败",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void SetAutoStart(bool enabled)

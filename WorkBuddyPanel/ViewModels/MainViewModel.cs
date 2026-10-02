@@ -1,10 +1,13 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using WorkBuddyPanel.Models;
 using WorkBuddyPanel.Services;
 
@@ -89,6 +92,153 @@ public sealed class ChatMessageVm : ObservableObject
     private string _reasoning = "";
     private bool _isStreaming;
 
+    /// <summary>
+    /// 拿来做下载、弹对话框、写状态栏。
+    ///
+    /// 为什么要有：图片的三个按钮（复制/保存/打开）都要下载那个地址、
+    /// 都要能弹文件对话框、都要能把结果写进状态栏 —— 这些能力都在
+    /// 主视图模型上。参照 AccountRowVm 的做法，把 owner 传进来。
+    /// </summary>
+    private readonly MainViewModel? _owner;
+
+    public ChatMessageVm() { }
+
+    public ChatMessageVm(MainViewModel owner) => _owner = owner;
+
+    /// <summary>把图片字节抓下来（带内存缓存，复制/保存/打开共用一次下载）。</summary>
+    private byte[]? _imageBytes;
+
+    /// <summary>
+    /// 图片操作命令。
+    ///
+    /// 刻意**不给 CanExecute 判定** —— 这三个按钮的可见性已经绑在 HasImage 上了
+    /// （没图时整个操作条不显示），再叠一层 CanExecute 只会引入一个经典毛病：
+    /// WPF 只在绑定时问一次 CanExecute，之后属性变了不重新问，
+    /// 结果就是「按钮显示了但一直是灰的」。实测踩过这个坑。
+    ///
+    /// 用 AsyncRelayCommand 是因为它自带「执行期间禁用自己」和错误回调，
+    /// 不用在各处手写 try/catch。
+    /// </summary>
+    public ICommand CopyImageCommand => _copyImage ??= new AsyncRelayCommand(CopyImageAsync, null, ex => _owner?.ReportError(ex));
+    public ICommand SaveImageCommand => _saveImage ??= new AsyncRelayCommand(SaveImageAsync, null, ex => _owner?.ReportError(ex));
+    public ICommand OpenImageCommand => _openImage ??= new AsyncRelayCommand(OpenImageAsync, null, ex => _owner?.ReportError(ex));
+
+    private ICommand? _copyImage;
+    private ICommand? _saveImage;
+    private ICommand? _openImage;
+
+    /// <summary>
+    /// 下载图片。三个操作共用 —— 点「复制」再点「保存」不会下载两遍。
+    ///
+    /// 地址来自网关，是带签名的本地地址（不依赖上游那个 1 小时失效的链接）。
+    /// </summary>
+    private async Task<byte[]?> FetchImageAsync()
+    {
+        if (_imageBytes is not null) return _imageBytes;
+        if (!HasImage) return null;
+
+        try
+        {
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            var bytes = await http.GetByteArrayAsync(ImageUrl).ConfigureAwait(true);
+            _imageBytes = bytes;
+            return bytes;
+        }
+        catch (Exception ex)
+        {
+            _owner?.ReportError(ex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 复制图片到剪贴板。
+    ///
+    /// 为什么要单独做：WPF 的 Image 控件**不响应 Ctrl+C**，也没有默认右键菜单。
+    /// 以前界面上写着「右键可保存到本地」是假的 —— 用户发现图根本复制不了。
+    ///
+    /// 剪贴板里同时放 PNG 和 Bitmap 两种格式：
+    ///   · PNG  → 粘进 Word / 微信 / 浏览器 都能用
+    ///   · Bitmap → 粘进画图 / 一些老程序才认
+    /// </summary>
+    private async Task CopyImageAsync()
+    {
+        var bytes = await FetchImageAsync();
+        if (bytes is null) return;
+
+        try
+        {
+            var bitmap = new BitmapImage();
+            using (var stream = new MemoryStream(bytes))
+            {
+                bitmap.BeginInit();
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;  // 拷完就断开流，别锁文件
+                bitmap.StreamSource = stream;
+                bitmap.EndInit();
+                bitmap.Freeze();                                 // 冻结后才能跨线程用
+            }
+
+            var data = new DataObject();
+            data.SetImage(bitmap);
+            // 再塞一份原始 PNG 字节 —— 有些程序只认这个格式
+            data.SetData("PNG", new MemoryStream(bytes));
+
+            Clipboard.SetDataObject(data, copy: true);
+            _owner?.SetStatus("图片已复制到剪贴板");
+        }
+        catch (Exception ex)
+        {
+            _owner?.ReportError(ex);
+        }
+    }
+
+    private async Task SaveImageAsync()
+    {
+        var bytes = await FetchImageAsync();
+        if (bytes is null) return;
+
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "保存图片",
+            FileName = $"workbuddy-{Time:yyyyMMdd-HHmmss}.png",
+            Filter = "PNG 图片|*.png|所有文件|*.*",
+            DefaultExt = ".png",
+        };
+        if (dialog.ShowDialog() != true) return;
+
+        try
+        {
+            await File.WriteAllBytesAsync(dialog.FileName, bytes);
+            _owner?.SetStatus($"图片已保存到 {dialog.FileName}");
+        }
+        catch (Exception ex)
+        {
+            _owner?.ReportError(ex);
+        }
+    }
+
+    /// <summary>用系统默认看图程序打开。临时文件放独立目录，避免每次落一地。</summary>
+    private async Task OpenImageAsync()
+    {
+        var bytes = await FetchImageAsync();
+        if (bytes is null) return;
+
+        try
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "WorkBuddyPanel");
+            Directory.CreateDirectory(dir);
+            var file = Path.Combine(dir, $"image-{Time:yyyyMMdd-HHmmss}.png");
+            await File.WriteAllBytesAsync(file, bytes);
+
+            Process.Start(new ProcessStartInfo(file) { UseShellExecute = true });
+            _owner?.SetStatus("已用系统看图程序打开");
+        }
+        catch (Exception ex)
+        {
+            _owner?.ReportError(ex);
+        }
+    }
+
     public bool IsUser { get; init; }
     public string RoleLabel => IsUser ? "我" : "WorkBuddy";
     public DateTime Time { get; } = DateTime.Now;
@@ -102,7 +252,239 @@ public sealed class ChatMessageVm : ObservableObject
             if (Set(ref _text, value))
             {
                 Raise(nameof(HasText));
+                Raise(nameof(ImageUrl));
+                Raise(nameof(EffectiveImageUrl));
+                Raise(nameof(HasImage));
+                Raise(nameof(TextWithoutImage));
+                Raise(nameof(VideoStatusPath));
+                Raise(nameof(HasVideoTask));
             }
+        }
+    }
+
+    /// <summary>
+    /// 从回复里找出生成图片的地址。
+    ///
+    /// 为什么需要：画图那条路返回的是 markdown
+    ///
+    ///     已生成图片：![生成结果](http://127.0.0.1:8787/v1/images/file/xxx.png?s=...)
+    ///
+    /// 而对话气泡里的正文是个 TextBox（纯文本），markdown 不会渲染 ——
+    /// 用户看到的就是那串原始字符，得手动复制地址才能在浏览器里打开。
+    /// 实测就有人问「这生成的图片去哪了」。
+    ///
+    /// 所以把地址抠出来，界面上直接显示图片。
+    /// </summary>
+    public string ImageUrl
+    {
+        get
+        {
+            if (IsUser) return "";
+            var m = System.Text.RegularExpressions.Regex.Match(
+                _text, @"!\[[^\]]*\]\((http[^\s\)]+)");
+            return m.Success ? m.Groups[1].Value : "";
+        }
+    }
+
+    /// <summary>
+    /// 图片地址**只在真的能用**时才有值。
+    ///
+    /// 为什么要多一层判断（踩过一个很贵的坑）：
+    ///
+    /// 一开始写的是 `ImageUrl` 抓到什么就返回什么。视频回复里没有图片，
+    /// 返回空串 —— 看着没问题，`Visibility` 也该把它藏起来。
+    ///
+    /// 但 WPF 的绑定**同时求值**：`Source=""` 照样会喂给
+    /// `ImageSourceConverter`，转换器对空串抛异常，异常又触发 `Measure`
+    /// 重排，重排又走到那个绑定…… **栈溢出，进程直接死**
+    /// （事件日志 `0xc00000fd`，dump 里能看到
+    /// ImageSourceConverter.ConvertFrom ↔ BindingExpression.TransferValue
+    /// 来回递归）。
+    ///
+    /// 所以：不能给 Image 控件任何它转换不了的值。空串也不行。
+    /// </summary>
+    public string EffectiveImageUrl
+    {
+        get
+        {
+            var url = ImageUrl;
+            if (url.Length == 0) return "";
+            // Image.Source 认 http/https/file 绝对路径；相对路径也能认，
+            // 但网关给的是完整 URL，这里只放行明确能解析的
+            return url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase)
+                ? url
+                : "";
+        }
+    }
+
+    public bool HasImage => EffectiveImageUrl.Length > 0;
+
+    /// <summary>
+    /// 这条回复里有没有**视频任务**（网关提交后就返回，不是成品）。
+    ///
+    /// 为什么单独处理：视频要几分钟渲染，网关提交完就返回一个任务 id
+    /// 和查询地址，让模型转告用户。用户看到的就是一段文字 —— 没有
+    /// 任何可点的东西，只能自己拼地址去浏览器查。
+    ///
+    /// 这里把它抠出来，界面上给个「查询进度」按钮。
+    /// 地址形如 /v1/video/status/wb-xxxx
+    /// </summary>
+    public string VideoStatusPath
+    {
+        get
+        {
+            if (IsUser) return "";
+            var m = System.Text.RegularExpressions.Regex.Match(_text, @"/v1/video/status/([A-Za-z0-9_\-]+)");
+            return m.Success ? m.Value : "";
+        }
+    }
+
+    public bool HasVideoTask => VideoStatusPath.Length > 0;
+
+    public ICommand CheckVideoCommand => _checkVideo ??= new AsyncRelayCommand(CheckVideoAsync, null, ex => _owner?.ReportError(ex));
+    private ICommand? _checkVideo;
+
+    /// <summary>
+    /// 查一次视频任务。
+    ///
+    /// 为什么不自动轮询：视频要几分钟，自动轮询要么让界面等半天，
+    /// 要么写个后台定时器一直开火。让用户点一下更简单也更可控 ——
+    /// 他知道自己在等什么。
+    /// </summary>
+    private async Task CheckVideoAsync()
+    {
+        if (!HasVideoTask || _owner is null) return;
+
+        try
+        {
+            _owner.SetStatus("正在查询视频进度…");
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+            var url = $"{_owner.BaseUrl.TrimEnd('/')}{VideoStatusPath.Replace("/v1", "")}";
+            // BaseUrl 已经是 http://host:port/v1，所以路径要去掉 /v1 前缀
+            url = _owner.BaseUrl.TrimEnd('/') + VideoStatusPath.Substring("/v1".Length);
+
+            using var req = new System.Net.Http.HttpRequestMessage(HttpMethod.Get, url);
+            if (_owner.ApiKey.Length > 0)
+                req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {_owner.ApiKey}");
+
+            using var resp = await http.SendAsync(req).ConfigureAwait(true);
+            var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(true);
+
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var status = root.TryGetProperty("status", out var st) ? st.GetString() ?? "?" : "?";
+
+            if (status is "completed" && root.TryGetProperty("data", out var data)
+                && data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0)
+            {
+                var videoUrl = data[0].TryGetProperty("url", out var u) ? u.GetString() : null;
+                if (videoUrl is { Length: > 0 })
+                {
+                    VideoUrl = videoUrl;
+                    Raise(nameof(VideoUrl));
+                    Raise(nameof(HasVideo));
+                    _owner.SetStatus("视频生成完成");
+                    return;
+                }
+            }
+
+            if (status is "failed" or "error")
+            {
+                var msg = root.TryGetProperty("error", out var e) && e.TryGetProperty("message", out var em)
+                    ? em.GetString() : null;
+                VideoNote = $"视频生成失败：{msg ?? "上游没有说明原因"}";
+                Raise(nameof(VideoNote));
+                _owner.SetStatus("视频生成失败");
+                return;
+            }
+
+            VideoNote = status switch
+            {
+                "pending" or "submitted" => "还在排队…",
+                "processing" or "running" => "正在渲染…",
+                _ => $"状态：{status}",
+            };
+            Raise(nameof(VideoNote));
+            _owner.SetStatus($"视频{VideoNote}");
+        }
+        catch (Exception ex)
+        {
+            _owner.ReportError(ex);
+        }
+    }
+
+    public ICommand OpenVideoCommand => _openVideo ??= new AsyncRelayCommand(OpenVideoAsync, null, ex => _owner?.ReportError(ex));
+    private ICommand? _openVideo;
+
+    /// <summary>
+    /// 打开生成的视频。
+    ///
+    /// 和图片一样先下载到本地再开 —— 网关的地址是带签名的完整 URL，
+    /// 但直接丢给系统播放器有时会因为没带请求头发起失败。下载到
+    /// 临时文件最稳。
+    /// </summary>
+    private async Task OpenVideoAsync()
+    {
+        if (!HasVideo || _owner is null) return;
+
+        try
+        {
+            _owner.SetStatus("正在下载视频…");
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(3) };
+            var bytes = await http.GetByteArrayAsync(VideoUrl).ConfigureAwait(true);
+
+            var dir = Path.Combine(Path.GetTempPath(), "WorkBuddyPanel");
+            Directory.CreateDirectory(dir);
+            var file = Path.Combine(dir, $"video-{Time:yyyyMMdd-HHmmss}.mp4");
+            await File.WriteAllBytesAsync(file, bytes).ConfigureAwait(true);
+
+            Process.Start(new ProcessStartInfo(file) { UseShellExecute = true });
+            _owner.SetStatus("已用系统播放器打开视频");
+        }
+        catch (Exception ex)
+        {
+            _owner.ReportError(ex);
+        }
+    }
+
+    /// <summary>视频好了之后的地址。</summary>
+    private string _videoUrl = "";
+    public string VideoUrl
+    {
+        get => _videoUrl;
+        set { if (Set(ref _videoUrl, value)) { Raise(nameof(HasVideo)); } }
+    }
+    public bool HasVideo => VideoUrl.Length > 0;
+
+    /// <summary>查询过程中的提示（「还在排队…」之类）。</summary>
+    private string _videoNote = "";
+    public string VideoNote
+    {
+        get => _videoNote;
+        set { if (Set(ref _videoNote, value)) Raise(nameof(HasVideoNote)); }
+    }
+    public bool HasVideoNote => VideoNote.Length > 0;
+
+    /// <summary>
+    /// 去掉图片那两行之后的文字。
+    ///
+    /// 图片已经用真的 Image 控件显示了，再把这串 markdown 和裸地址
+    /// 原样摆一遍是重复信息。
+    /// </summary>
+    public string TextWithoutImage
+    {
+        get
+        {
+            if (!HasImage) return _text;
+            var lines = _text.Split('\n')
+                .Where(l => !l.Contains("!["))
+                .Where(l => !l.TrimStart().StartsWith("地址："))
+                .ToList();
+            return string.Join("\n", lines).Trim();
         }
     }
 
@@ -223,6 +605,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         InitialiseClients();
         InitialiseAccounts();
+        InitialisePools();
 
         // 一次性提示的自动清除
         _statusTimer.Tick += (_, _) =>
@@ -336,7 +719,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public string SettingsDirtyHint => SettingsDirty
         ? "⚠ 有改动还没保存。点上面的「保存设置」，否则「启动网关」用的还是旧参数。"
-        : "改动会即时写入 settings.json；上面这几个（端口 / 版本 / 密钥 / 路径）改动后要点「保存设置」。";
+        : "上面这几个（端口 / 版本 / 密钥 / 路径）改完后要点「保存设置」。";
 
     /// <summary>把当前编辑中的值写进配置对象并落盘。</summary>
 
@@ -510,7 +893,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// 现在这类“动作已做完”的回执 12 秒后自己消失，
     /// 真正的状态（路径来源、错误）还是用常驻的 StatusDetail。
     /// </summary>
-    private void FlashStatus(string message)
+    internal void FlashStatus(string message)
     {
         StatusDetail = message;
         Raise(nameof(StatusIsTransient));
@@ -519,7 +902,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>常驻状态：不会被自动清掉（错误、当前配置这类）。</summary>
-    private void SetStatus(string message)
+    internal void SetStatus(string message)
     {
         _statusTimer.Stop();
         StatusIsTransient = false;
@@ -628,10 +1011,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     // 所以统一在这里展开一次，界面上仍然显示用户填的那个（相对）样子。
 
     /// <summary>实际启动进程用的 node.exe 绝对路径。</summary>
-    private string? ResolvedNodePath => ProcessLocator.MakeAbsolute(NodePath);
+    internal string? ResolvedNodePath => ProcessLocator.MakeAbsolute(NodePath);
 
     /// <summary>实际启动进程用的 workbuddy_api 绝对目录。</summary>
-    private string? ResolvedApiDirectory => ProcessLocator.MakeAbsolute(ApiDirectory);
+    internal string? ResolvedApiDirectory => ProcessLocator.MakeAbsolute(ApiDirectory);
 
     public bool CanRunNode =>
         ResolvedNodePath is { } node && File.Exists(node) &&
@@ -643,7 +1026,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>当前用的 workbuddy_api 是从哪来的。</summary>
     public string ApiOriginText => ProcessLocator.ApiOrigin(ApiDirectory).Describe();
 
-    public string RuntimeSummary => $"Node.js 来源：{NodeOriginText}　·　workbuddy_api 来源：{ApiOriginText}";
+    public string RuntimeSummary => $"运行环境：{NodeOriginText}　·　服务程序：{ApiOriginText}";
 
     /// <summary>
     /// 界面上显示一个路径：填的是相对路径就补上「→ 实际指向哪里」，
@@ -663,11 +1046,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             if (!AppSettings.IsReleaseBuild)
             {
-                return "调试版：路径留空即可，程序会自己去系统里找 Node.js，并从 exe 所在目录向上找 workbuddy_api 仓库。";
+                return "开发版：路径留空即可，程序会自己去找运行环境和服务程序。";
             }
 
-            return $"发布版默认：{AppSettings.DefaultNodePathRelative} 和 {AppSettings.DefaultApiDirectoryRelative}"
-                 + "（相对 exe 所在目录）。发布包里自带这两样，一般不用改。";
+            return "默认使用程序自带的环境，一般不用改。";
         }
     }
 
@@ -704,6 +1086,24 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<EnvironmentCheckVm> EnvironmentChecks { get; } = [];
 
     /// <summary>重新跑一遍体检，把结果填进 EnvironmentChecks。</summary>
+    /// <summary>
+    /// 重新跑一遍体检，把结果填进 EnvironmentChecks。
+    ///
+    /// ⚠ 这个方法会在**后台线程**上被调用（`await Task.Run(RefreshEnvironment)`），
+    /// 但它改的 EnvironmentChecks 是绑定到界面的集合。
+    ///
+    /// WPF 的规则：绑定了界面的 ObservableCollection 只能在 UI 线程上改。
+    /// 从后台线程改会抛：
+    ///
+    ///     该类型的 CollectionView 不支持从调度线程以外的线程
+    ///     对其 SourceCollection 进行的更改。
+    ///
+    /// 而且这个异常会被启动路径上的 fire-and-forget 吞掉，
+    /// 表现是“界面出来了但什么都不加载”—— 实测踩过。
+    ///
+    /// 所以这里分段：计算部分留在后台（不碰界面属性），
+    /// 写集合的时候切回 UI 线程。
+    /// </summary>
     public void RefreshEnvironment()
     {
         var checks = new List<EnvironmentCheckVm>();
@@ -712,34 +1112,67 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         checks.Add(new EnvironmentCheckVm(".NET 运行时", true,
             $"已加载 {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}"));
 
-        // ② 自带的便携版 Node
+        // ② 自带的运行环境
         var bundledNode = ProcessLocator.BundledNodePath;
-        checks.Add(new EnvironmentCheckVm("自带的 Node.js", File.Exists(bundledNode),
+        checks.Add(new EnvironmentCheckVm("自带的运行环境", File.Exists(bundledNode),
             File.Exists(bundledNode)
-                ? bundledNode
+                ? "就绪"
                 : $"不在 {bundledNode}（如果这个包本该自带，说明文件被删了）"));
 
-        // ③ 自带的 workbuddy_api
+        // ③ 自带的服务程序
         var bundledApi = ProcessLocator.BundledApiDirectory;
         var bundledApiOk = File.Exists(Path.Combine(bundledApi, "src", "bin.js"));
-        checks.Add(new EnvironmentCheckVm("自带的 workbuddy_api", bundledApiOk,
-            bundledApiOk ? bundledApi : $"不在 {bundledApi}"));
+        checks.Add(new EnvironmentCheckVm("自带的服务程序", bundledApiOk,
+            bundledApiOk ? "就绪" : $"不在 {bundledApi}"));
 
-        // ④ 实际会用的 node
+        // ④ 实际会用的运行环境
         //    这里报**展开后**的绝对路径：发布版默认填的是 .\runtime\node.exe，
         //    只显示相对路径的话，用户没法确认它到底指向哪里。
-        checks.Add(new EnvironmentCheckVm("实际使用的 node.exe", CanRunNode && !string.IsNullOrEmpty(NodePath),
+        checks.Add(new EnvironmentCheckVm("实际使用的运行环境", CanRunNode && !string.IsNullOrEmpty(NodePath),
             string.IsNullOrEmpty(NodePath) ? "没找到（自带的和系统装的都没有）" : $"{DescribePath(NodePath)}（{NodeOriginText}）"));
 
-        // ⑤ 实际会用的 workbuddy_api
-        checks.Add(new EnvironmentCheckVm("实际使用的 workbuddy_api", CanRunNode && !string.IsNullOrEmpty(ApiDirectory),
+        // ⑤ 实际会用的服务程序
+        checks.Add(new EnvironmentCheckVm("实际使用的服务程序", CanRunNode && !string.IsNullOrEmpty(ApiDirectory),
             string.IsNullOrEmpty(ApiDirectory) ? "没找到" : $"{DescribePath(ApiDirectory)}（{ApiOriginText}）"));
 
-        EnvironmentChecks.Clear();
-        foreach (var check in checks) EnvironmentChecks.Add(check);
+        // 计算好了，写集合要切回 UI 线程
+        RunOnUiThread(() =>
+        {
+            EnvironmentChecks.Clear();
+            foreach (var check in checks) EnvironmentChecks.Add(check);
+        });
 
         Raise(nameof(HasEnvironmentProblem));
         Raise(nameof(PathsHint));
+    }
+
+    /// <summary>
+    /// 在 UI 线程上执行一段代码。
+    ///
+    /// 已经在 UI 线程上就直接跑（避免无谓的调度开销）；
+    /// 不在就丢到 Dispatcher 里并等它做完。
+    ///
+    /// 为什么要"等"：调用方（比如 RefreshEnvironment）后面还要用集合的结果，
+    /// 不等的话会先返回、状态显示成旧的。
+    /// </summary>
+    private static void RunOnUiThread(Action action)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+
+        // 没有 Application（单元测试、纯命令行调用）—— 直接跑
+        if (dispatcher is null)
+        {
+            action();
+            return;
+        }
+
+        if (dispatcher.CheckAccess())
+        {
+            action();
+            return;
+        }
+
+        dispatcher.Invoke(action);
     }
 
     /// <summary>体检结果里“缺了什么”，给首页那张警告卡用。</summary>
@@ -753,10 +1186,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
             var missing = new List<string>();
             if (string.IsNullOrEmpty(NodePath) || ResolvedNodePath is not { } node || !File.Exists(node))
-                missing.Add("Node.js");
+                missing.Add("运行环境");
             if (string.IsNullOrEmpty(ApiDirectory) || ResolvedApiDirectory is not { } api ||
                 !File.Exists(CliRunner.DescribeApiDirectory(api)))
-                missing.Add("workbuddy_api");
+                missing.Add("服务程序");
 
             var text = $"缺 {string.Join(" 和 ", missing)}。";
 
@@ -766,17 +1199,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
             if (bundledNodeOk || bundledApiOk)
             {
-                text += "自带的运行时还在，点「自动探测」应该能找回来。";
+                text += "自带的还在，点「自动探测」应该能找回来。";
             }
             else if (Directory.Exists(ProcessLocator.RuntimeRoot))
             {
-                text += "runtime 目录下没有可用的文件 —— 可能是被删了或被杀软拦了。"
-                     + "重新解压一次发布包，或者在「设置」里手动指定。";
+                text += "程序目录下的环境文件不完整 —— 可能是被删了或被杀软拦了。"
+                     + "重新解压一次，或者在「设置」里手动指定。";
             }
             else
             {
-                text += "这个发布包里没有 runtime 目录，需要自己装 Node.js 20.10+（https://nodejs.org/），"
-                     + "或者在「设置」里指定已有的 node.exe。";
+                text += "这个包没有自带运行环境，需要自己装一个，"
+                     + "或者在「设置」里指定已有的。";
             }
 
             return text;
@@ -819,7 +1252,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // 现在并行，总耗时看最慢的那一个（账号列表 1.9s），而且全程不卡界面。
         await Task.WhenAll(
             RefreshClientsAsync(),
-            RefreshAccountsAsync(),
+            // 账号用「先快后补」：先 --no-checkin（5 秒出列表），
+            // 签到状态后台再查（完整查询要 10 秒，等它启动会很慢）
+            RefreshAccountsAtStartupAsync(),
             RefreshStatusAsync(),
             RefreshModelsAsync());
 
@@ -828,6 +1263,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         await RefreshAutoStartStateAsync();
 
         if (CcSwitch.IsAvailable) await RefreshCcSwitchStateAsync();
+
+        // 分池：把标了「自动启动」的池拉起来。
+        //
+        // 放在最后，因为它会启 node 子进程（每个几百毫秒）。
+        // 默认池那一个实际上已经被上面那条主流程起过了，这里会跳过它。
+        await AutoStartPoolsAsync();
     }
 
     // ── 路径探测 ───────────────────────────────────────────────
@@ -859,8 +1300,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _suppressDirty = false;
         }
 
-        AppendLog($"node.exe：{NodePath ?? "(没找到)"}　来源：{NodeOriginText}");
-        AppendLog($"workbuddy_api：{ApiDirectory ?? "(没找到)"}　来源：{ApiOriginText}");
+        AppendLog($"运行环境：{NodePath ?? "(没找到)"}　来源：{NodeOriginText}");
+        AppendLog($"服务程序：{ApiDirectory ?? "(没找到)"}　来源：{ApiOriginText}");
         RaiseDerived();
 
         // 探测结果直接落盘，下次启动不用再找一遍
@@ -880,7 +1321,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (int.TryParse(Port, out var p) && p is > 0 and <= 65535) _settings.Port = p;
         _settings.Save();
         SettingsDirty = false;
-        AppendLog("设置已保存到 %APPDATA%\\WorkBuddyPanel\\settings.json");
+        AppendLog("设置已保存。");
     }
 
     /// <summary>把需要保存的那几个恢复成默认值（并落盘）。</summary>
@@ -936,6 +1377,147 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     // ── 网关启停 ───────────────────────────────────────────────
+
+    /// <summary>
+    /// 这个端口上跑的是不是 WorkBuddy 网关；是的话把它的自述读出来。
+    ///
+    /// 判断依据：我们的 `/healthz` 会回 `{"ok":true,"provider":"workbuddy",…}`。
+    /// 别的程序不会碰巧返回这个结构，所以这个判据足够。
+    ///
+    /// 顺带读出 `buildId` —— 那是**那个进程启动时加载的代码**的指纹。
+    /// 面板用它判断「端口上那个网关是不是旧代码」。
+    ///
+    /// 超时给得很短（800ms）—— 如果对方不是 HTTP 服务，连接会很快被拒；
+    /// 如果是 HTTP 但不响应，也不该让启动流程卡住。
+    /// </summary>
+    private static async Task<GatewayHealth?> ProbeGatewayAsync(int port)
+    {
+        try
+        {
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMilliseconds(800) };
+            var body = await http.GetStringAsync($"http://127.0.0.1:{port}/healthz");
+            if (!body.Contains("\"ok\"", StringComparison.Ordinal)
+                || !body.Contains("workbuddy", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            return new GatewayHealth(
+                BuildId: root.TryGetProperty("buildId", out var b) ? b.GetString() ?? "" : "",
+                StartedAt: root.TryGetProperty("startedAt", out var s) && s.TryGetDateTime(out var t)
+                    ? t.ToLocalTime()
+                    : (DateTime?)null,
+                Stale: root.TryGetProperty("stale", out var st) && st.ValueKind == JsonValueKind.True);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 正在跑的那个网关是不是旧代码。
+    ///
+    /// 怎么判断：拿它自报的 `buildId`，跟**磁盘上现在这份代码**算出来的
+    /// 指纹比。不一样就说明：代码在它启动之后改过。
+    ///
+    /// 哪些情况会不一样：
+    ///   · 装完新版本但旧网关没重启（**最常见**）
+    ///   · 开发时改了源码没重启
+    ///
+    /// 老版本的网关不报 buildId（回空串）—— 那种也是旧代码。
+    /// </summary>
+    private static async Task<(bool IsStale, DateTime? StartedAt)> IsGatewayStaleAsync(int port, string apiDirectory)
+    {
+        var health = await ProbeGatewayAsync(port);
+        if (health is null) return (false, null);
+
+        // 不回 buildId 说明是加这个字段之前的版本 —— 那就是旧的
+        if (health.BuildId.Length == 0) return (true, health.StartedAt);
+
+        var onDisk = await Task.Run(() => ComputeSourceFingerprint(apiDirectory));
+        if (onDisk.Length == 0) return (health.Stale, health.StartedAt);
+
+        return (health.BuildId != onDisk || health.Stale, health.StartedAt);
+    }
+
+    /// <summary>
+    /// 算磁盘上那份网关源码的指纹 —— 算法必须和网关自己的 `src/build-id.js` 一模一样。
+    ///
+    /// 两边算法不一致的话，面板会永远以为网关是旧的（或者永远以为是最新的），
+    /// 比不检查还糟。所以那边改了算法这里也得改 —— 这是这份代码唯一脆弱的地方，
+    /// 我在网关那边加了注释互相指路。
+    /// </summary>
+    private static string ComputeSourceFingerprint(string apiDirectory)
+    {
+        try
+        {
+            var dir = Path.Combine(apiDirectory, "src");
+            if (!Directory.Exists(dir)) return "";
+
+            var files = Directory.GetFiles(dir, "*.js")
+                .Select(Path.GetFileName)
+                .Where(n => n is not null)
+                .Select(n => n!)
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .ToList();
+
+            var parts = new List<string>();
+            foreach (var name in files)
+            {
+                var info = new FileInfo(Path.Combine(dir, name));
+                // 网关用 Math.floor(mtimeMs) —— 这里是 Unix 毫秒，要对上
+                var ms = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds();
+                parts.Add($"{name}:{info.Length}:{ms}");
+            }
+
+            if (parts.Count == 0) return "";
+
+            var bytes = System.Text.Encoding.UTF8.GetBytes(string.Join("|", parts));
+            var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+            return Convert.ToHexString(hash).ToLowerInvariant()[..12];
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    /// <summary>`/healthz` 里我们关心的字段。</summary>
+    private sealed record GatewayHealth(string BuildId, DateTime? StartedAt, bool Stale);
+
+    /// <summary>
+    /// 把端口上那个**旧版本**的网关换掉，好让我们起一个新的。
+    ///
+    /// 为什么需要这个操作：真实事故 —— 8787 上跑着几小时前的孤儿网关，
+    /// 代码改了好几轮，但那个进程不会自动重载。面板重启后看到「端口上
+    /// 有人在监听」就采用了它，于是功能还是旧的。用户看到的是
+    /// 「某某功能用不了」，完全不知道为什么。
+    ///
+    /// 安全约束全在 <see cref="ProcessReaper"/> 里 —— 那里只做三重匹配
+    /// （node.exe + bin.js serve + --port N），任何一条对不上就不动手。
+    ///
+    /// ⚠ 特别提醒：8787 上那个网关同时是 AI 助手（pi）的模型来源。
+    /// 杀掉它会让助手当场断线。但这是**部署环境的现实**，不是这份代码
+    /// 该回避的事 —— 用户重启面板时本来就期望代码生效。真正要防的是
+    /// 「杀错进程」（比如逮着一个碰巧占端口的别的 node 程序就杀），
+    /// 那由 ProcessReaper 的三重匹配挡住。
+    /// </summary>
+    private async Task<bool> ReplaceExternalGatewayAsync(int port)
+    {
+        var ok = await ProcessReaper.ReplaceGatewayOnPortAsync(port, AppendLog).ConfigureAwait(true);
+
+        if (ok)
+        {
+            AppendLog($"旧网关已停掉，端口 {port} 现在可用了。");
+            IsGatewayRunning = false;
+        }
+
+        return ok;
+    }
+
     /// <summary>
     /// 启动网关。失败时抛异常，由调用方决定是弹窗（用户手点）还是只写日志（开机自启）。
     /// </summary>
@@ -944,17 +1526,93 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (!CanRunNode)
         {
             throw new InvalidOperationException(
-                "路径没配好。到「设置」标签页点「自动探测」，或手动指定 node.exe 和 workbuddy_api 目录。");
+                "路径没配好。到「设置」标签页点「自动探测」，或手动指定运行环境和服务程序。");
         }
 
         if (!int.TryParse(Port, out var port) || port is < 0 or > 65535)
             throw new InvalidOperationException($"端口号不对：{Port}");
 
+        //
+        // 端口被占 —— 但要先分清"谁在占"：
+        //
+        //   ① 是本程序启动的网关（或另一个实例启的）
+        //      → 正常。直接当"已在运行"，不报错
+        //
+        //   ② 是别的程序（或者上次异常退出留下的脏进程）
+        //      → 才是真问题，要告诉用户怎么办
+        //
+        // 之前不看是①还是②，只要端口被占就报"没关干净、请重启电脑"。
+        // 实际常见的情况是①：比如用户开了两个面板实例、或者另一个工具在用同一端口。
+        // 实测就误报过 —— 看到"端口被占"但网关其实在健康运行。
+        //
         if (port != 0 && CliRunner.IsPortInUse(port))
+        {
+            if (await ProbeGatewayAsync(port) is not null)
+            {
+                // 是自己人。但**还得看是不是旧代码** ——
+                //
+                // 实际踩过的事故：8787 上跑着几小时前的孤儿网关，
+                // 面板重启后「采用」了它，于是改过的代码不生效。
+                // 用户看到的是「功能还是旧的」，完全不知道为什么。
+                var (stale, startedAt) = await IsGatewayStaleAsync(port, ApiDirectory);
+                if (stale)
+                {
+                    var when = startedAt is null ? "" : $"，启动于 {startedAt:MM-dd HH:mm}";
+                    AppendLog($"端口 {port} 上的网关是**旧代码**{when}，正在重启它…");
+                    SetStatus("检测到旧版网关，正在重启…");
+
+                    if (await ReplaceExternalGatewayAsync(port))
+                    {
+                        // 重启成功 —— 往下走正常启动流程（不要 return）
+                    }
+                    else
+                    {
+                        // 重启失败（认不出那个进程 / 停不掉）—— 采用旧的，
+                        // 但把话说清楚，别让用户以为功能是新的。
+                        AppendLog($"没能重启旧网关，仍然采用端口 {port} 上的旧实例。");
+                        SetStatus("⚠ 正在运行的是旧版本，部分功能可能不对");
+                        IsGatewayRunning = true;
+                        BaseUrl = $"http://127.0.0.1:{port}/v1";
+                        AdoptGatewayIntoDefaultPool(externalRunning: true, externalUrl: BaseUrl);
+                        _chat?.Dispose();
+                        _chat = new ChatStreamClient(BaseUrl, ApiKey);
+                        return;
+                    }
+                }
+                else
+                {
+                    // 代码是最新的，当它已经在跑
+                    AppendLog($"端口 {port} 上已经有网关在运行（代码是最新的），直接采用它。");
+                    IsGatewayRunning = true;
+
+                    // 这条路径以前没登记到分池 —— 于是分池页上默认池显示「已停止」，
+                    // 还多个「启动」按钮（点了会因为端口被占而报错）。
+                    // 网关是真的在跑，两边得说同一句话。
+                    BaseUrl = $"http://127.0.0.1:{port}/v1";
+                    AdoptGatewayIntoDefaultPool(externalRunning: true, externalUrl: BaseUrl);
+
+                    // ⚠ 必须重建聊天客户端。
+                    //
+                    // 以前漏了这一步，后果很隐蔽：
+                    //   ① 点「停止网关」→ StopGateway() 把 _chat 清成 null
+                    //   ② 再点「启动网关」→ 端口上那个 node 其实没死（成了孤儿），
+                    //      于是走这条「采用」路径
+                    //   ③ 采用只设了 IsGatewayRunning = true，_chat 还是 null
+                    //   ④ 界面：发送按钮是亮的（CanSend 只看 IsGatewayRunning）
+                    //      实际：SendAsync 第一行 `if (_chat is null) return` 静默返回
+                    //   → 用户看到的就是「发送按钮失效了，点了没反应」
+                    _chat?.Dispose();
+                    _chat = new ChatStreamClient(BaseUrl, ApiKey);
+
+                    return;
+                }
+            }
+
             throw new InvalidOperationException(
                 $"端口 {port} 已经被别的程序占用了。\n\n" +
                 "可能是之前启动的网关没关干净（比如上次程序被强制结束）。\n" +
                 "解决办法：在「设置」里把端口改成别的（比如 8788），或者重启电脑。");
+        }
 
         SaveSettings();
         ClearLogInternal();
@@ -981,6 +1639,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _chat?.Dispose();
             _chat = new ChatStreamClient(BaseUrl, ApiKey);
             IsGatewayRunning = true;
+
+            // 把主编这个实例登记给默认池，分池页才能对同一个进程说同一句话。
+            // （否则分池页会以为默认池是「已停止」，或者自己另起一个占端口）
+            AdoptGatewayIntoDefaultPool();
+
             FlashStatus("网关已启动");
             AppendLog($"网关就绪：{BaseUrl}");
         }
@@ -992,6 +1655,36 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         await RefreshStatusAsync();
         await RefreshModelsAsync();
+    }
+
+    /// <summary>
+    /// 确保**当前看的那一个池**在跑。默认池就走原来的路径。
+    ///
+    /// 「一键接入」用它 —— 以前那里查的是 IsGatewayRunning（主编的状态），
+    /// 切到别的池时会误以为网关已经在跑。
+    /// </summary>
+    public async Task<bool> TryStartCurrentPoolAsync()
+    {
+        if (CurrentPoolRunning) return true;
+        if (!CanRunNode) return false;
+
+        if (SelectedPool is null)
+        {
+            // 默认池：原来的路径
+            return await TryStartGatewayAsync();
+        }
+
+        try
+        {
+            await ToggleCurrentGatewayAsync();
+            return CurrentPoolRunning;
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[静默启动失败] 「{CurrentPoolLabel}」：{ex.Message}");
+            StatusDetail = $"「{CurrentPoolLabel}」启动失败：{ex.Message}";
+            return false;
+        }
     }
 
     /// <summary>
@@ -1037,21 +1730,93 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         BaseUrl = "";
         _chat?.Dispose();
         _chat = null;
+        // 实例已经退了，分池页上默认池也该显示「已停止」
+        RefreshPools();
     }
 
     private void OnGatewayLog(string line)
     {
-        // 网关的日志线程不是 UI 线程，转发到 UI 线程
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is null || dispatcher.CheckAccess()) AppendLog(line);
-        else dispatcher.BeginInvoke(() => AppendLog(line));
+        // 网关的日志线程不是 UI 线程，转发到 UI 线程。
+        //
+        // 注：AppendLog 自己也会做这个检查，这里保留只是为了语义清楚。
+        AppendLog(line);
     }
 
     private void AppendLog(string line)
     {
+        // 必须在 UI 线程上改 Log —— 它绑到界面，ObservableCollection 的
+        // CollectionChanged 会直接通知 WPF 的 CollectionView，
+        // 从别的线程改会抛：
+        //
+        //     System.NotSupportedException:
+        //     该类型的 CollectionView 不支持从调度程序线程以外的线程
+        //     对其 SourceCollection 进行的更改。
+        //
+        // 这个坑踩过两次：
+        //   1. RefreshEnvironment 在 Task.Run 里改 EnvironmentChecks
+        //   2. 分池的 PoolManager.Log += AppendLog —— 池的网关
+        //      输出事件在**线程池线程**上触发（GatewayRunner.HandleLine），
+        //      于是启动池时直接闪退
+        //
+        // 所以保护做在这里（而不是每个调用入口）—— AppendLog 是个
+        // 天然会被后台线程调用的地方，只堵入口迟早还会漏。
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(() => AppendLog(line));
+            return;
+        }
+
         var stamp = DateTime.Now.ToString("HH:mm:ss");
         Log.Add($"[{stamp}] {line}");
         while (Log.Count > 2000) Log.RemoveAt(0);
+
+        // 同时落盘。
+        //
+        // 以前日志只在内存里，用户报问题、或者我自己排查时都看不到。
+        // 只写追加一个文件，开销很小。
+        // 单独一个文件，不和维护日志混在一起 —— 那个是给计划任务用的。
+        WriteUiLog($"[{stamp}] {line}");
+    }
+
+    /// <summary>
+    /// 从外部（比如 App 的启动异常处理）往界面日志里写一行。
+    ///
+    /// 为什么需要：启动流程抛异常时，ViewModel 可能还没建好，
+    /// 但用户需要看到“到底怎么了”——而且得先落盘再说话。
+    /// </summary>
+    public void AppendExternalLog(string line) => AppendLog(line);
+
+    private static readonly object UiLogGate = new();
+
+    private static void WriteUiLog(string line)
+    {
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "WorkBuddyPanel");
+            Directory.CreateDirectory(dir);
+
+            var path = Path.Combine(dir, "ui.log");
+
+            // 超过 1MB 就截掉一半 —— 长时间开着不至于无限增长
+            var info = new FileInfo(path);
+            if (info.Exists && info.Length > 1_000_000)
+            {
+                var lines = File.ReadAllLines(path);
+                File.WriteAllLines(path, lines.Skip(lines.Length / 2));
+            }
+
+            lock (UiLogGate)
+            {
+                File.AppendAllText(path, line + Environment.NewLine, System.Text.Encoding.UTF8);
+            }
+        }
+        catch
+        {
+            // 日志写不了不能影响主流程
+        }
     }
 
     private void ClearLogInternal() => Log.Clear();
@@ -1066,7 +1831,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// 所有 CLI 调用都走这里，为的是统一把相对路径（.\runtime\...）展开成绝对路径 ——
     /// 漏掉任何一处，发布版默认路径就会在那边悄悄失效。
     /// </summary>
-    private Task<CliResult> RunCliAsync(string arguments, string? stdin = null, CancellationToken ct = default)
+    internal Task<CliResult> RunCliAsync(string arguments, string? stdin = null, CancellationToken ct = default)
         => CliRunner.RunAsync(
             ResolvedNodePath ?? NodePath,
             ResolvedApiDirectory ?? ApiDirectory,
@@ -1132,7 +1897,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         ModelCountText = dto.Catalog?.Count?.ToString(CultureInfo.InvariantCulture) ?? "—";
 
-        StatusDetail = $"账号来源：{dto.Source ?? "—"}　域名：{dto.Domain ?? "—"}　状态目录：{dto.StateHome ?? "—"}";
+        // 状态文字 —— 只说用户看得懂的东西。
+        //
+        // 以前写的是：账号来源：vault　域名：www.workbuddy.cn　状态目录：C:\Users\...\.workbuddy-api
+        // 其中 vault / 状态目录 / 那个内部路径都不该暴露 ——
+        // 用户不需要知道底层怎么存的。
+        var account = dto.Nickname ?? dto.Email;
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(account)) parts.Add(account);
+        if (!string.IsNullOrWhiteSpace(dto.Domain)) parts.Add(dto.Domain);
+        if (dto.Credits is { } remainingCredits) parts.Add($"{remainingCredits:0.##} 积分");
+
+        StatusDetail = parts.Count > 0
+            ? $"已登录：{string.Join("　·　", parts)}"
+            : "已登录";
     }
 
     private async Task RefreshModelsAsync()
@@ -1221,7 +1999,30 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task SendAsync()
     {
-        if (_chat is null || SelectedModel is null) return;
+        // 前置条件不满足时**要说出来**，不能静默返回。
+        //
+        // 以前是 `if (_chat is null) return;` —— 什么也不做也不报错。
+        // 配合另一个 bug（采用已有网关时没重建 _chat），表现就成了
+        // 「发送按钮亮着但点了没反应」，而且日志里一个字都没有，
+        // 根本无从下手查。
+        //
+        // 现在：告诉用户为什么没发出去。
+        if (_chat is null)
+        {
+            SetStatus(IsGatewayRunning
+                ? "聊天连接没建好 —— 请点一下「停止网关」再「启动网关」"
+                : "网关没在跑，先在首页启动它");
+            AppendLog("[发送] 被拦下：聊天客户端未建立（_chat 为空）");
+            return;
+        }
+
+        if (SelectedModel is null)
+        {
+            SetStatus("还没选模型，在下面那个下拉框里选一个");
+            AppendLog("[发送] 被拦下：没选模型");
+            return;
+        }
+
         var prompt = Input.Trim();
         if (prompt.Length == 0) return;
 
@@ -1233,11 +2034,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         history.Add(new ChatTurn("user", prompt));
 
-        Messages.Add(new ChatMessageVm { IsUser = true, Text = prompt });
+        Messages.Add(new ChatMessageVm(this) { IsUser = true, Text = prompt });
         Input = "";
         Raise(nameof(HasMessages));
 
-        var answer = new ChatMessageVm { IsUser = false, IsStreaming = true };
+        var answer = new ChatMessageVm(this) { IsUser = false, IsStreaming = true };
         Messages.Add(answer);
         Raise(nameof(HasMessages));
 
@@ -1317,6 +2118,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _generation?.Cancel();
         _generation?.Dispose();
         _chat?.Dispose();
+
+        // 先收掉所有非默认池的实例，再收主编那个 ——
+        // 默认池是「代管」主编的 GatewayRunner 的，两边都 Dispose 会重复 Kill。
+        try { _pools?.Dispose(); } catch { }
         _gateway.Dispose();
     }
 }
