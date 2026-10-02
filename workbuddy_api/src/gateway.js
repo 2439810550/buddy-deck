@@ -26,6 +26,7 @@ import { timingSafeEqual } from "node:crypto";
 import {
   classifyUpstreamError,
   collectChatCompletion,
+  extractDisplayErrorMessage,
   iterateSseData,
   prepareBodyFor,
 } from "./upstream.js";
@@ -101,6 +102,21 @@ function writeJson(res, status, body) {
 
 function writeOpenAIError(res, status, kind, message) {
   writeJson(res, status, { error: { message, type: kind, code: kind } });
+}
+
+/**
+ * The client-facing text for one upstream failure.
+ *
+ * Prefers the upstream's own localised `displayMsg` over the raw JSON excerpt:
+ * business errors (safety review, illegal request) carry their real reason
+ * there, and pasting the whole envelope buries it. The `(http …)` status note
+ * is deliberately kept — unlike the DSH host, this gateway classifies on
+ * `kind`, not on a substring of the text, so the number stays a diagnosis
+ * rather than a mis-classification trigger.
+ */
+function upstreamErrorMessage(result) {
+  const detail = extractDisplayErrorMessage(result.message) ?? result.message.slice(0, 400);
+  return `workbuddy upstream ${result.kind} (http ${result.status}): ${detail}`;
 }
 
 /** Read a request body with a size cap. */
@@ -665,7 +681,7 @@ export function createGateway(options) {
       const shaped = adapter.error(
         KIND_STATUS[result.kind] ?? 502,
         result.kind,
-        `workbuddy upstream ${result.kind} (http ${result.status}): ${result.message.slice(0, 400)}${extra}`,
+        `${upstreamErrorMessage(result)}${extra}`,
       );
       writeJson(res, shaped.status, shaped.body);
     };
@@ -1295,7 +1311,7 @@ export function createGateway(options) {
         res,
         KIND_STATUS[result.kind] ?? 502,
         result.kind,
-        `workbuddy upstream ${result.kind} (http ${result.status}): ${result.message.slice(0, 400)}${extra}`,
+        `${upstreamErrorMessage(result)}${extra}`,
       );
     };
 

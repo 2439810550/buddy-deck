@@ -37,6 +37,7 @@ export {
   chatHeaders,
   classifyUpstreamError,
   collectChatCompletion,
+  extractDisplayErrorMessage,
   iterateSseData,
   modelWithCurrentPromotion,
   normalizeCredits,

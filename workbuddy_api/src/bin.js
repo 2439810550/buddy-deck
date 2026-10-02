@@ -282,14 +282,22 @@ async function primeCatalog({ client, catalog, store, router }) {
 async function commandUsage(flags) {
   const { readFile, stat } = await import("node:fs/promises");
   const path = ledgerPath();
+  const json = flags["json"] === true;
+
+  // --json 是给脚本用的契约：**任何分支**都必须产出合法 JSON，
+  // 包括"没有记录"。否则调用方拿到一句中文会直接解析失败。
+  const empty = (reason) => {
+    if (json) process.stdout.write(`${JSON.stringify({ ledger: path, empty: true, reason })}\n`);
+    else process.stdout.write(`${reason}\n每调一次模型就会记一行：${path}\n`);
+    return 0;
+  };
 
   let text;
   try {
     await stat(path);
     text = await readFile(path, "utf8");
   } catch {
-    process.stdout.write(`账本还没有内容。\n每调一次模型就会记一行：${path}\n`);
-    return 0;
+    return empty("账本还没有内容。");
   }
 
   let entries = parseLedger(text);
@@ -301,13 +309,12 @@ async function commandUsage(flags) {
   }
 
   if (entries.length === 0) {
-    process.stdout.write("这个时间范围内没有记录。\n");
-    return 0;
+    return empty(days > 0 ? `这个时间范围内没有记录（最近 ${days} 天）。` : "账本没有可用的记录。");
   }
 
   const agg = aggregate(entries);
 
-  if (flags["json"] === true) {
+  if (json) {
     process.stdout.write(JSON.stringify(agg, null, 2) + "\n");
     return 0;
   }

@@ -66,6 +66,13 @@ const INTERNATIONAL_SYSTEM_PROMPT = "You are a helpful assistant.";
  */
 export function classifyUpstreamError(status, body) {
   if (status === 402) return "hard_credit";
+  // A 401 is an auth failure whatever its body says: there is no business
+  // meaning for it on this upstream, and the session-dead markers below are
+  // only an *additional* signal (they also catch dead sessions answered as
+  // 403). Classification happens before the credit markers on purpose, so a
+  // bare 401 whose body happens to name credits still reports `session_dead`
+  // and keeps its `(http 401)`/AUTH meaning for whatever consumes this.
+  if (status === 401) return "session_dead";
   const lower = String(body).toLowerCase();
   for (const marker of HARD_CREDIT_MARKERS) {
     if (lower.includes(marker.toLowerCase()) || String(body).includes(marker)) return "hard_credit";
@@ -75,6 +82,38 @@ export function classifyUpstreamError(status, body) {
   if (status === 404) return "not_found";
   if (status >= 500) return "server";
   return "client";
+}
+
+/**
+ * Extract a user-facing error message from an upstream JSON response body.
+ *
+ * WorkBuddy answers business errors (safety review, illegal request) with a
+ * structured `displayMsg`, localised as `{zh, en}`, alongside the terse `msg`.
+ * Preferring `displayMsg` means a client shows the reason the upstream actually
+ * stated instead of a wall of raw JSON. Falls back to `msg`, and returns
+ * `undefined` for anything that is not a JSON object so the caller can keep
+ * showing the raw excerpt.
+ *
+ * @param {string} body the raw response body
+ * @returns {string|undefined}
+ */
+export function extractDisplayErrorMessage(body) {
+  const text = String(body ?? "").trim();
+  if (!text.startsWith("{")) return undefined;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isObject(parsed)) return undefined;
+  const displayMsg = parsed["displayMsg"];
+  if (isObject(displayMsg)) {
+    if (typeof displayMsg["zh"] === "string" && displayMsg["zh"].trim() !== "") return displayMsg["zh"].trim();
+    if (typeof displayMsg["en"] === "string" && displayMsg["en"].trim() !== "") return displayMsg["en"].trim();
+  }
+  if (typeof parsed["msg"] === "string" && parsed["msg"].trim() !== "") return parsed["msg"].trim();
+  return undefined;
 }
 
 function chatBase(variant) {
@@ -104,8 +143,13 @@ function commonHeaders(variant) {
  * Chat request headers, including the `X-No-*` conventions the official client
  * uses. `userAgent` carries the desktop identity; when absent the shared
  * CLI-form UA applies.
+ *
+ * `X-IDE-*` is the IDE attribution family (upstream plugin 0.6.3, issue 54).
+ * It rides on the *same* resolved desktop identity as the UA — `clientVersion`
+ * is that identity's app version — and, like the UA override, it belongs to
+ * chat and probe only: refresh, catalog and billing must stay free of it.
  */
-export function chatHeaders(credential, variant, userAgent) {
+export function chatHeaders(credential, variant, userAgent, clientVersion) {
   return {
     ...commonHeaders(variant),
     ...(userAgent === undefined ? {} : { "User-Agent": userAgent }),
@@ -115,6 +159,9 @@ export function chatHeaders(credential, variant, userAgent) {
       ? { "X-No-Enterprise-Id": "1" }
       : { "X-Enterprise-Id": credential.enterpriseId }),
     ...(credential.domain === "" ? { "X-No-Department-Info": "1" } : { "X-Domain": credential.domain }),
+    "X-IDE-Type": "WorkBuddy",
+    "X-IDE-Name": "WorkBuddy",
+    ...(typeof clientVersion === "string" && clientVersion !== "" ? { "X-IDE-Version": clientVersion } : {}),
     "X-Product": "SaaS",
   };
 }
@@ -497,13 +544,28 @@ export class WorkBuddyClient {
     this.lastCatalog = undefined;
   }
 
-  /** The desktop-shaped User-Agent for chat requests, never throwing. */
-  async chatAgent() {
+  /**
+   * The desktop identity for chat requests: the User-Agent to present and the
+   * app version the `X-IDE-Version` attribution header must carry.
+   *
+   * Both come from *one* resolution so the UA and the header can never
+   * disagree about which client is calling. This never throws: a resolver
+   * failure — or a resolved identity whose version would be unsafe to put in a
+   * header — degrades to the desktop fallback form (compiled-in version, no
+   * `CLI/…` segment), never to the bare CLI UA. A message must not fail
+   * because the install tree could not be read.
+   *
+   * @returns {Promise<{userAgent: string, clientVersion: string}>}
+   */
+  async chatIdentity() {
+    let identity;
     try {
-      return chatUserAgent(await resolveChatIdentity(this.variant), this.variant);
+      identity = await resolveChatIdentity(this.variant);
+      return { userAgent: chatUserAgent(identity, this.variant), clientVersion: identity.clientVersion };
     } catch {
-      return chatUserAgent(fallbackChatIdentity(this.variant), this.variant);
+      identity = fallbackChatIdentity(this.variant);
     }
+    return { userAgent: chatUserAgent(identity, this.variant), clientVersion: identity.clientVersion };
   }
 
   /**
@@ -513,13 +575,13 @@ export class WorkBuddyClient {
    * @returns {Promise<{ok: true, response: Response} | {ok: false, status: number, kind: string, message: string}>}
    */
   async chatStream(credential, body, signal) {
-    const userAgent = await this.chatAgent();
+    const identity = await this.chatIdentity();
     let response;
     try {
       response = await this.fetchImpl(`${chatBase(this.variant)}/v2/chat/completions`, {
         method: "POST",
         headers: {
-          ...chatHeaders(credential, this.variant, userAgent),
+          ...chatHeaders(credential, this.variant, identity.userAgent, identity.clientVersion),
           Authorization: `Bearer ${credential.accessToken}`,
         },
         body,
@@ -922,7 +984,9 @@ export async function collectChatCompletion(response) {
 export async function probeEffort(variant, credential, model, effort, signal) {
   const international = variant.region === "global";
   const client = new WorkBuddyClient(variant);
-  const userAgent = await client.chatAgent();
+  // Same identity rule as the chat path: the probe sibling must never present a
+  // different client than a real message would.
+  const identity = await client.chatIdentity();
   const payload = {
     model,
     stream: true,
@@ -939,7 +1003,7 @@ export async function probeEffort(variant, credential, model, effort, signal) {
     response = await client.fetchImpl(`${chatBase(variant)}/v2/chat/completions`, {
       method: "POST",
       headers: {
-        ...chatHeaders(credential, variant, userAgent),
+        ...chatHeaders(credential, variant, identity.userAgent, identity.clientVersion),
         Authorization: `Bearer ${credential.accessToken}`,
       },
       body: JSON.stringify(payload),

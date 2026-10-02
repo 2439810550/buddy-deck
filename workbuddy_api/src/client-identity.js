@@ -192,23 +192,23 @@ async function resolveAppVersion(variant) {
     const installed = await installedAppVersion(variant.appName);
     if (installed !== undefined && validAppVersion(installed.version)) {
       const cliVersion = await readCliVersion(installed.bundle);
-      return { version: installed.version, ...(cliVersion === undefined ? {} : { cliVersion }) };
+      return { clientVersion: installed.version, ...(cliVersion === undefined ? {} : { cliVersion }) };
     }
   }
   if (process.platform === "win32") {
     const registry = await readWindowsRegistryVersion(variant.appName);
     if (registry !== undefined) {
       const cliVersion = registry.bundle === undefined ? undefined : await readCliVersion(registry.bundle);
-      return { version: registry.version, ...(cliVersion === undefined ? {} : { cliVersion }) };
+      return { clientVersion: registry.version, ...(cliVersion === undefined ? {} : { cliVersion }) };
     }
     const installed = await readWindowsAppVersion(variant.appName.replace(/\s+/gu, ""));
     if (installed !== undefined) {
       const cliVersion = await readCliVersion(installed.bundle);
-      return { version: installed.version, ...(cliVersion === undefined ? {} : { cliVersion }) };
+      return { clientVersion: installed.version, ...(cliVersion === undefined ? {} : { cliVersion }) };
     }
   }
   return {
-    version: variant.region === "global" ? FALLBACK_AI_APP_VERSION : FALLBACK_CN_APP_VERSION,
+    clientVersion: variant.region === "global" ? FALLBACK_AI_APP_VERSION : FALLBACK_CN_APP_VERSION,
   };
 }
 
