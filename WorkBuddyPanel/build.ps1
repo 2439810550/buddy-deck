@@ -108,6 +108,15 @@ if (Test-Path (Join-Path $apiSource "LICENSE")) {
     Copy-Item (Join-Path $apiSource "LICENSE") $apiDest -Force
 }
 
+# skills/：给「别人的 AI 工具」用的技能包（Claude Code / pi / DSH 那种）。
+#
+# 网关自己运行**不需要**它 —— 但用户装了这套之后，多半会想让自己的
+# 编辑器/harness 也用上联网能力（那些工具是按 skill 目录找的）。
+# 只有几个文件，带上不亏。
+if (Test-Path (Join-Path $apiSource "skills")) {
+    Copy-Item (Join-Path $apiSource "skills") $apiDest -Recurse -Force
+}
+
 $size = (Get-ChildItem $publish -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1MB
 Write-Host ""
 Write-Host ("完成：{0}   （{1:N1} MB）" -f $publish, $size) -ForegroundColor Green
