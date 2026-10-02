@@ -1379,27 +1379,143 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     // ── 网关启停 ───────────────────────────────────────────────
 
     /// <summary>
-    /// 这个端口上跑的是不是 WorkBuddy 网关。
+    /// 这个端口上跑的是不是 WorkBuddy 网关；是的话把它的自述读出来。
     ///
     /// 判断依据：我们的 `/healthz` 会回 `{"ok":true,"provider":"workbuddy",…}`。
     /// 别的程序不会碰巧返回这个结构，所以这个判据足够。
     ///
+    /// 顺带读出 `buildId` —— 那是**那个进程启动时加载的代码**的指纹。
+    /// 面板用它判断「端口上那个网关是不是旧代码」。
+    ///
     /// 超时给得很短（800ms）—— 如果对方不是 HTTP 服务，连接会很快被拒；
     /// 如果是 HTTP 但不响应，也不该让启动流程卡住。
     /// </summary>
-    private static async Task<bool> IsOurGatewayOnPortAsync(int port)
+    private static async Task<GatewayHealth?> ProbeGatewayAsync(int port)
     {
         try
         {
             using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMilliseconds(800) };
             var body = await http.GetStringAsync($"http://127.0.0.1:{port}/healthz");
-            return body.Contains("\"ok\"", StringComparison.Ordinal)
-                && body.Contains("workbuddy", StringComparison.OrdinalIgnoreCase);
+            if (!body.Contains("\"ok\"", StringComparison.Ordinal)
+                || !body.Contains("workbuddy", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            return new GatewayHealth(
+                BuildId: root.TryGetProperty("buildId", out var b) ? b.GetString() ?? "" : "",
+                StartedAt: root.TryGetProperty("startedAt", out var s) && s.TryGetDateTime(out var t)
+                    ? t.ToLocalTime()
+                    : (DateTime?)null,
+                Stale: root.TryGetProperty("stale", out var st) && st.ValueKind == JsonValueKind.True);
         }
         catch
         {
-            return false;
+            return null;
         }
+    }
+
+    /// <summary>
+    /// 正在跑的那个网关是不是旧代码。
+    ///
+    /// 怎么判断：拿它自报的 `buildId`，跟**磁盘上现在这份代码**算出来的
+    /// 指纹比。不一样就说明：代码在它启动之后改过。
+    ///
+    /// 哪些情况会不一样：
+    ///   · 装完新版本但旧网关没重启（**最常见**）
+    ///   · 开发时改了源码没重启
+    ///
+    /// 老版本的网关不报 buildId（回空串）—— 那种也是旧代码。
+    /// </summary>
+    private static async Task<(bool IsStale, DateTime? StartedAt)> IsGatewayStaleAsync(int port, string apiDirectory)
+    {
+        var health = await ProbeGatewayAsync(port);
+        if (health is null) return (false, null);
+
+        // 不回 buildId 说明是加这个字段之前的版本 —— 那就是旧的
+        if (health.BuildId.Length == 0) return (true, health.StartedAt);
+
+        var onDisk = await Task.Run(() => ComputeSourceFingerprint(apiDirectory));
+        if (onDisk.Length == 0) return (health.Stale, health.StartedAt);
+
+        return (health.BuildId != onDisk || health.Stale, health.StartedAt);
+    }
+
+    /// <summary>
+    /// 算磁盘上那份网关源码的指纹 —— 算法必须和网关自己的 `src/build-id.js` 一模一样。
+    ///
+    /// 两边算法不一致的话，面板会永远以为网关是旧的（或者永远以为是最新的），
+    /// 比不检查还糟。所以那边改了算法这里也得改 —— 这是这份代码唯一脆弱的地方，
+    /// 我在网关那边加了注释互相指路。
+    /// </summary>
+    private static string ComputeSourceFingerprint(string apiDirectory)
+    {
+        try
+        {
+            var dir = Path.Combine(apiDirectory, "src");
+            if (!Directory.Exists(dir)) return "";
+
+            var files = Directory.GetFiles(dir, "*.js")
+                .Select(Path.GetFileName)
+                .Where(n => n is not null)
+                .Select(n => n!)
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .ToList();
+
+            var parts = new List<string>();
+            foreach (var name in files)
+            {
+                var info = new FileInfo(Path.Combine(dir, name));
+                // 网关用 Math.floor(mtimeMs) —— 这里是 Unix 毫秒，要对上
+                var ms = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds();
+                parts.Add($"{name}:{info.Length}:{ms}");
+            }
+
+            if (parts.Count == 0) return "";
+
+            var bytes = System.Text.Encoding.UTF8.GetBytes(string.Join("|", parts));
+            var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+            return Convert.ToHexString(hash).ToLowerInvariant()[..12];
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    /// <summary>`/healthz` 里我们关心的字段。</summary>
+    private sealed record GatewayHealth(string BuildId, DateTime? StartedAt, bool Stale);
+
+    /// <summary>
+    /// 把端口上那个**旧版本**的网关换掉，好让我们起一个新的。
+    ///
+    /// 为什么需要这个操作：真实事故 —— 8787 上跑着几小时前的孤儿网关，
+    /// 代码改了好几轮，但那个进程不会自动重载。面板重启后看到「端口上
+    /// 有人在监听」就采用了它，于是功能还是旧的。用户看到的是
+    /// 「某某功能用不了」，完全不知道为什么。
+    ///
+    /// 安全约束全在 <see cref="ProcessReaper"/> 里 —— 那里只做三重匹配
+    /// （node.exe + bin.js serve + --port N），任何一条对不上就不动手。
+    ///
+    /// ⚠ 特别提醒：8787 上那个网关同时是 AI 助手（pi）的模型来源。
+    /// 杀掉它会让助手当场断线。但这是**部署环境的现实**，不是这份代码
+    /// 该回避的事 —— 用户重启面板时本来就期望代码生效。真正要防的是
+    /// 「杀错进程」（比如逮着一个碰巧占端口的别的 node 程序就杀），
+    /// 那由 ProcessReaper 的三重匹配挡住。
+    /// </summary>
+    private async Task<bool> ReplaceExternalGatewayAsync(int port)
+    {
+        var ok = await ProcessReaper.ReplaceGatewayOnPortAsync(port, AppendLog).ConfigureAwait(true);
+
+        if (ok)
+        {
+            AppendLog($"旧网关已停掉，端口 {port} 现在可用了。");
+            IsGatewayRunning = false;
+        }
+
+        return ok;
     }
 
     /// <summary>
@@ -1431,32 +1547,65 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         //
         if (port != 0 && CliRunner.IsPortInUse(port))
         {
-            if (await IsOurGatewayOnPortAsync(port))
+            if (await ProbeGatewayAsync(port) is not null)
             {
-                // 自己人，当它已经在跑
-                AppendLog($"端口 {port} 上已经有网关在运行，直接采用它。");
-                IsGatewayRunning = true;
-
-                // 这条路径以前没登记到分池 —— 于是分池页上默认池显示「已停止」，
-                // 还多个「启动」按钮（点了会因为端口被占而报错）。
-                // 网关是真的在跑，两边得说同一句话。
-                BaseUrl = $"http://127.0.0.1:{port}/v1";
-                AdoptGatewayIntoDefaultPool(externalRunning: true, externalUrl: BaseUrl);
-
-                // ⚠ 必须重建聊天客户端。
+                // 是自己人。但**还得看是不是旧代码** ——
                 //
-                // 以前漏了这一步，后果很隐蔽：
-                //   ① 点「停止网关」→ StopGateway() 把 _chat 清成 null
-                //   ② 再点「启动网关」→ 端口上那个 node 其实没死（成了孤儿），
-                //      于是走这条「采用」路径
-                //   ③ 采用只设了 IsGatewayRunning = true，_chat 还是 null
-                //   ④ 界面：发送按钮是亮的（CanSend 只看 IsGatewayRunning）
-                //      实际：SendAsync 第一行 `if (_chat is null) return` 静默返回
-                //   → 用户看到的就是「发送按钮失效了，点了没反应」
-                _chat?.Dispose();
-                _chat = new ChatStreamClient(BaseUrl, ApiKey);
+                // 实际踩过的事故：8787 上跑着几小时前的孤儿网关，
+                // 面板重启后「采用」了它，于是改过的代码不生效。
+                // 用户看到的是「功能还是旧的」，完全不知道为什么。
+                var (stale, startedAt) = await IsGatewayStaleAsync(port, ApiDirectory);
+                if (stale)
+                {
+                    var when = startedAt is null ? "" : $"，启动于 {startedAt:MM-dd HH:mm}";
+                    AppendLog($"端口 {port} 上的网关是**旧代码**{when}，正在重启它…");
+                    SetStatus("检测到旧版网关，正在重启…");
 
-                return;
+                    if (await ReplaceExternalGatewayAsync(port))
+                    {
+                        // 重启成功 —— 往下走正常启动流程（不要 return）
+                    }
+                    else
+                    {
+                        // 重启失败（认不出那个进程 / 停不掉）—— 采用旧的，
+                        // 但把话说清楚，别让用户以为功能是新的。
+                        AppendLog($"没能重启旧网关，仍然采用端口 {port} 上的旧实例。");
+                        SetStatus("⚠ 正在运行的是旧版本，部分功能可能不对");
+                        IsGatewayRunning = true;
+                        BaseUrl = $"http://127.0.0.1:{port}/v1";
+                        AdoptGatewayIntoDefaultPool(externalRunning: true, externalUrl: BaseUrl);
+                        _chat?.Dispose();
+                        _chat = new ChatStreamClient(BaseUrl, ApiKey);
+                        return;
+                    }
+                }
+                else
+                {
+                    // 代码是最新的，当它已经在跑
+                    AppendLog($"端口 {port} 上已经有网关在运行（代码是最新的），直接采用它。");
+                    IsGatewayRunning = true;
+
+                    // 这条路径以前没登记到分池 —— 于是分池页上默认池显示「已停止」，
+                    // 还多个「启动」按钮（点了会因为端口被占而报错）。
+                    // 网关是真的在跑，两边得说同一句话。
+                    BaseUrl = $"http://127.0.0.1:{port}/v1";
+                    AdoptGatewayIntoDefaultPool(externalRunning: true, externalUrl: BaseUrl);
+
+                    // ⚠ 必须重建聊天客户端。
+                    //
+                    // 以前漏了这一步，后果很隐蔽：
+                    //   ① 点「停止网关」→ StopGateway() 把 _chat 清成 null
+                    //   ② 再点「启动网关」→ 端口上那个 node 其实没死（成了孤儿），
+                    //      于是走这条「采用」路径
+                    //   ③ 采用只设了 IsGatewayRunning = true，_chat 还是 null
+                    //   ④ 界面：发送按钮是亮的（CanSend 只看 IsGatewayRunning）
+                    //      实际：SendAsync 第一行 `if (_chat is null) return` 静默返回
+                    //   → 用户看到的就是「发送按钮失效了，点了没反应」
+                    _chat?.Dispose();
+                    _chat = new ChatStreamClient(BaseUrl, ApiKey);
+
+                    return;
+                }
             }
 
             throw new InvalidOperationException(

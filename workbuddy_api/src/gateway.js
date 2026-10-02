@@ -38,6 +38,7 @@ import { runAgentNonStreaming, runAgentStreaming } from "./agent.js";
 import * as anthropic from "./anthropic.js";
 import * as responses from "./responses.js";
 import { recordUsage } from "./usage.js";
+import { BUILD_ID, STARTED_AT, isStale } from "./build-id.js";
 
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
@@ -465,7 +466,23 @@ export function createGateway(options) {
     const url = rawUrl.split("?")[0];
 
     if (req.method === "GET" && (url === "/healthz" || url === "/healthz/")) {
-      writeJson(res, 200, { ok: true, provider: variant.id, models: catalog.base().length });
+      // buildId 是**这个进程启动时加载的代码**的指纹。
+      //
+      // 面板靠它判断「端口上那个网关是不是最新代码」——
+      // 这是真事引起的：8787 上跑着几小时前的孤儿进程，面板点
+      // 「启动网关」时只看到「有人在监听」就采用了它，于是改过的
+      // 代码不生效，表现成「功能还是旧的」。
+      //
+      // 另外报一个 stale：磁盘上的代码和正在跑的这份是不是同一个。
+      // 开发时改了文件但没重启服务就会不一样。
+      writeJson(res, 200, {
+        ok: true,
+        provider: variant.id,
+        models: catalog.base().length,
+        buildId: BUILD_ID,
+        startedAt: STARTED_AT,
+        stale: isStale(),
+      });
       return;
     }
 

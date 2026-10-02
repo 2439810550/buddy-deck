@@ -12,6 +12,7 @@
       ① 编译
       ② XAML 静态检查（绑定 + 资源引用）
       ③ 纯逻辑单元测试（PoolStore / VaultMover）
+      ③b 旧网关替换（会起/停测试网关，不碰 8787）
       ④ 分池隔离验证
       ⑤ 界面点击测试（8 个标签页）
 
@@ -99,6 +100,30 @@ if (Test-Path $logicProj) {
         Select-Object -Last 8 |
         ForEach-Object { Write-Host "  $_" }
     Add-Result "纯逻辑单元测试" ($logicCode -eq 0)
+}
+
+# ── ③b 进程清理（旧网关替换）──────────────────────────────────
+#
+# 这一段测的是**会杀进程**的代码，所以单独列出来。
+# 它自己搭场景（拷一份源码加标记、起一个旧网关）、自己收尾。
+# ⚠ 它只对 8787 做只读探测 —— 那是 AI 助手的命脉，绝不碰。
+$reaperProj = Join-Path $here "tests/ProcessReaper"
+if (Test-Path $reaperProj) {
+    Write-Head "旧网关替换（ProcessReaper）"
+
+    Push-Location $reaperProj
+    try {
+        $reaperOut = & dotnet run -c Release 2>&1
+        $reaperCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+
+    $reaperOut |
+        Where-Object { $_ -notmatch "warning" } |
+        Select-Object -Last 6 |
+        ForEach-Object { Write-Host "  $_" }
+    Add-Result "旧网关替换" ($reaperCode -eq 0)
 }
 
 # ── ④ 分池隔离验证 ────────────────────────────────────────────
