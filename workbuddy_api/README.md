@@ -925,6 +925,57 @@ mtime + 大小已经足够区分「代码变了没有」。
 
 ---
 
+## 限流冷却（`429` / `soft_rate`）
+
+被上游限流的模型会被**记一笔冷却**，冷却期内不再请求它（省得白试），
+自动换下一个可用模型。全部模型都在冷却时，返回：
+
+```json
+{
+  "error": {
+    "message": "所有可用模型都在限流冷却中（试过 4 次）",
+    "type": "soft_rate",
+    "code": 429
+  }
+}
+```
+
+### 修过的两个 bug（都是这个功能里的）
+
+**① 全部冷却时返回 `undefined`**
+
+`sendWithFallback` 循环最多 4 次。如果每次一上来就发现「模型在冷却中」，
+就 `continue` 到下一个 —— **一次真实请求都不发**。4 次跑完从循环末尾
+出去时 `result` 还是 `undefined`，调用方立刻读 `result.ok` → `TypeError`。
+
+流式路径上这个异常发生在响应已经发了一半之后，客户端看到的是
+莫名其妙的 `stream failed mid-flight: Cannot read properties of undefined`。
+
+循环前面有一个 `next === undefined` 的提前返回，**那个是有兜底的**，
+但「跑满 4 次」从循环末尾出去，走不到它。两处现在都有。
+
+**② `coolingModels()` 永远返回空集**
+
+账号标识的格式是 `uid:enterpriseId` —— **本身就带冒号**。而
+`coolingModels` 靠 `key.split(":")` 反推账号和模型：
+
+```javascript
+mark("8081:ent456", "hy3")   →  key = "8081:ent456:hy3"
+key.split(":")               →  ["8081", "ent456", "hy3"]
+const [owner, model] = ...   →  owner="8081", model="ent456"   ← 错了
+owner !== account            →  永远不匹配 → 返回空集
+```
+
+后果：`pickFallbackModel` 以为「没有模型在冷却」，一直挑已经冷却的那个，
+反复跳过，把 4 次机会耗光 —— 于是撞上 ①。
+
+改法：`mark()` 把 `account` 和 `model` **各存一份**进 entry，不再靠拆 key
+反推。这类「用分隔符拼 key 再拆开」的写法在有嵌套分隔符的数据上必然出错。
+
+测法：`node scripts/test-ratelimit-fallback.mjs`（21 项）。
+
+---
+
 ## 已知限制
 
 - **国际版（WorkBuddy AI）代码就绪但未实测**——开发机只装了国内版。国际版走

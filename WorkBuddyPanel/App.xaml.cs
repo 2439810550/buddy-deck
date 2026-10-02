@@ -320,14 +320,63 @@ public partial class App : Application
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         // 先落盘：这类错误（典型是绑定写回只读属性）在界面上只闪一个弹窗，
-        // 用户一点确定就没了。和上面那个 handler 一样，日志里要留一份。
+        // 用户一点确定就没了。日志里要留一份。
         MainViewModel.WriteMaintenanceLog("[未处理异常] " + e.Exception);
+
+        // ⚠ 这里有**两层保护**，都是被真实的闪退逼出来的：
+        //
+        // 场景：界面在布局时抛异常（比如虚拟化列表生成容器时空引用）。
+        // 异常处理器弹 MessageBox —— 而 MessageBox 是**模态**的，
+        // 它会重入消息循环 → WPF 又跑一遍布局 → 又抛同一个异常
+        // → 又进这个处理器 → 又弹窗 ……
+        //
+        // 实测：栈里这个函数重复了 29 次，2900 层栈，最后栈溢出
+        // （0xc00000fd，崩在 dwrite.dll）——**整个进程死掉**。
+        //
+        // `e.Handled = true` 拦不住它：递归发生在 MessageBox.Show
+        // **内部**，不是在它返回之后。
+        e.Handled = true;
+
+        // 第一层：同一个异常（类型 + 消息）只弹一次窗。
+        //
+        // 布局类的异常会一轮一轮地重复抛，但它们其实是**同一个问题**。
+        // 用户看一遍就够了，看 29 遍也没用（而且第 29 遍是崩溃）。
+        var signature = $"{e.Exception.GetType().Name}:{e.Exception.Message}";
+        if (signature == _lastExceptionSignature) return;
+        _lastExceptionSignature = signature;
+
+        // 第二层：熔断。
+        //
+        // 就算签名每次都不同（消息里带随机数/时间戳之类），也不能
+        // 无限弹。超过这个数就只写日志，不再弹窗 —— 保证界面还能用，
+        // 用户能从托盘退出或者重启。
+        _exceptionCount += 1;
+        if (_exceptionCount > MAX_POPUP_EXCEPTIONS)
+        {
+            MainViewModel.WriteMaintenanceLog(
+                $"[未处理异常] 已经弹了 {MAX_POPUP_EXCEPTIONS} 次，后面只记日志不再弹窗（防止弹窗重入把栈打爆）");
+            return;
+        }
 
         MessageBox.Show(
             e.Exception.Message,
             "WorkBuddy 控制台 — 操作出错",
             MessageBoxButton.OK,
             MessageBoxImage.Warning);
-        e.Handled = true;
     }
+
+    /// <summary>上一次弹过窗的异常签名（类型 + 消息）。</summary>
+    private string? _lastExceptionSignature;
+
+    /// <summary>这次运行弹过几次异常窗。</summary>
+    private int _exceptionCount;
+
+    /// <summary>
+    /// 最多弹几次异常窗。
+    ///
+    /// 为什么要有上限：弹窗会重入消息循环，而重入时界面可能又抛异常。
+    /// 实测 29 次就把栈打爆了（0xc00000fd）。给个远小于那个数的上限，
+    /// 宁可少弹几个窗，也不能让进程死。
+    /// </summary>
+    private const int MAX_POPUP_EXCEPTIONS = 3;
 }

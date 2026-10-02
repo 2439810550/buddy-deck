@@ -138,7 +138,23 @@ export class RateLimitTracker {
   mark(account, model, { resetAt, text } = {}) {
     const key = `${account}:${model}`;
     const until = typeof resetAt === "number" ? resetAt : Date.now() + 5 * 60_000;
-    this.entries.set(key, { until, at: Date.now(), text: String(text ?? "").slice(0, 200) });
+    // ⚠ account 和 model **各存一份**，不要靠拆 key 反推。
+    //
+    // 踩过的坑：account 的格式是 `uid:enterpriseId`，**本身就带冒号**。
+    // key 拼成 `8081:ent456:hy3`，用 split(":") 拆出来的是
+    // ["8081", "ent456", "hy3"] —— 解构 `[owner, model]` 得到
+    // owner="8081"、model="ent456"，跟 account 永远对不上。
+    //
+    // 后果：coolingModels() 永远返回空集 → pickFallbackModel 以为
+    // 「没有模型在冷却」，一直挑已经冷却的那个 → 反复跳过 →
+    // 4 次机会耗光 → result 还是 undefined → 调用方读 result.ok 崩。
+    this.entries.set(key, {
+      until,
+      at: Date.now(),
+      text: String(text ?? "").slice(0, 200),
+      account,
+      model,
+    });
     return until;
   }
 
@@ -157,9 +173,9 @@ export class RateLimitTracker {
   coolingModels(account, now = Date.now()) {
     const out = new Set();
     for (const [key, entry] of this.entries) {
-      const [owner, model] = key.split(":");
-      if (owner !== account) continue;
-      if (entry.until > now) out.add(model);
+      // 用 entry 里存的字段，不拆 key —— 见 mark() 里的说明
+      if (entry.account !== account) continue;
+      if (entry.until > now) out.add(entry.model);
       else this.entries.delete(key);
     }
     return out;

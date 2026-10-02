@@ -13,6 +13,7 @@
       ② XAML 静态检查（绑定 + 资源引用）
       ③ 纯逻辑单元测试（PoolStore / VaultMover）
       ③b 旧网关替换（会起/停测试网关，不碰 8787）
+      ③c 异常处理器防递归（防闪退）
       ④ 分池隔离验证
       ⑤ 界面点击测试（8 个标签页）
 
@@ -124,6 +125,28 @@ if (Test-Path $reaperProj) {
         Select-Object -Last 6 |
         ForEach-Object { Write-Host "  $_" }
     Add-Result "旧网关替换" ($reaperCode -eq 0)
+}
+
+# ── ③c 异常处理器防递归 ────────────────────────────────────────
+#
+# 测的是「弹窗重入消息循环导致栈溢出」那个闪退。
+$guardProj = Join-Path $here "tests/ExceptionGuard"
+if (Test-Path $guardProj) {
+    Write-Head "异常处理器防递归（ExceptionGuard）"
+
+    Push-Location $guardProj
+    try {
+        $guardOut = & dotnet run -c Release 2>&1
+        $guardCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+
+    $guardOut |
+        Where-Object { $_ -notmatch "warning" } |
+        Select-Object -Last 5 |
+        ForEach-Object { Write-Host "  $_" }
+    Add-Result "异常处理器防递归" ($guardCode -eq 0)
 }
 
 # ── ④ 分池隔离验证 ────────────────────────────────────────────

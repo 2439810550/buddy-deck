@@ -478,7 +478,28 @@ export function createGateway(options) {
       current = next;
     }
 
-    return { result, model: current, attempts };
+    // 跑到这里 = 4 次机会用完了，而且**一次真实请求都没发出去**
+    // （所有模型都在冷却里就被 continue 掉了）。
+    //
+    // ⚠ 这里必须兜底：不兜的话 result 是 undefined，调用方那句
+    // `if (!result.ok)` 直接抛 TypeError，而且是在响应已经发了一半的
+    // 流式路径上 —— 客户端看到的就是莫名其妙的「stream failed mid-flight」。
+    //
+    // 实测踩过：三个模型同时被限流、都在冷却窗口里，用户一发消息就报
+    // 「Cannot read properties of undefined (reading 'ok')」。
+    //
+    // 上面那个 `next === undefined` 分支返回时有同样的兜底，但**循环跑满
+    // 4 次**是从这里出去的，走不到那个分支。两处都要有。
+    return {
+      result: result ?? {
+        ok: false,
+        status: 429,
+        kind: "soft_rate",
+        message: `所有可用模型都在限流冷却中（试过 ${attempts.length} 次）`,
+      },
+      model: current,
+      attempts,
+    };
   }
 
   const server = createServer((req, res) => {
