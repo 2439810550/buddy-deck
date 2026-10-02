@@ -20,6 +20,7 @@ CLI 入口 (bin.js)
    │        └── 数据 (models.cn.json / models.ai.json)
    │
    ├── 账单 (usage.js) ───── 用量账本（记上游给的真实 credit）
+   ├── 联网 (search.js) ──── 搜索 / 抓网页（/agenttool/v1/*）
    ├── 多账号 (accounts.js) ─ 保险库 + AccountRouter
    ├── 签到 (checkin.js) ─── 每日签到
    ├── 搬运 (transfer.js) ── 账号跨机加密导出/导入
@@ -31,6 +32,7 @@ CLI 入口 (bin.js)
             │        └── 公共零件 (protocol.js)  ← 模型别名 / token 估算 / SSE
             ├── 协议适配 (responses.js) ── OpenAI Responses ←→ Chat
             ├── 限流规避 (ratelimit.js) ── 429 后自动换模型
+            ├── 联网端点 (/v1/search · /v1/webfetch → search.js)
             ├── agent 循环 (agent.js) ─── 网关自己执行注入的媒体工具
             │        └── 工具定义 (media-tools.js) ← 判断"是不是我们的工具"
             └── 画图 / 视频 (miora.js) ── 注入 miora 实例给 agent（走 ctx，不是 import）
@@ -350,6 +352,36 @@ CC Switch 切换供应商时是**整体覆盖** agent 配置文件的。如果�
 
 ---
 
+### `src/search.js` — 联网搜索 / 网页抓取
+
+WorkBuddy 的第三块能力（前两块是聊天模型和 Miora 生成）。反代官方 Agent 的
+两个联网工具 `/agenttool/v1/search` 与 `/agenttool/v1/webfetch`，让任何
+CLI / 编辑器 / harness 都能用上账号的联网额度。
+
+和 `miora.js` 一样用**惰性 credential**（`() => store.resolve()`），所以
+换号、token 续期都自动跟上 —— **不需要**自己维护 token 文件。
+
+> **维护要点**：
+> 1. `includeDomains` 是**本地过滤**的 —— 上游的 `allowed_domains` 实测不生效
+>    （限定 `docs.python.org` 仍返回 CSDN）。有过滤时要把 `max_results` 拉满再筛，
+>    否则筛完不够数。域名匹配用「相等或子域」，别退回 `endsWith`（`a.com` 会误配
+>    `nota.com`）。
+> 2. 响应是**扁平**的（业务字段和 `code` 同级），不是套在 `data` 里 ——
+>    别照抄计费端点的 `readEnvelope` 取法。
+> 3. 401/403 必须是 `UNAUTHORIZED`，**绝不降级成空结果**：那会让"登录失效"
+>    伪装成"没搜到"。
+
+### `skills/workbuddy-web-search/` — 可分发到其他 harness 的 skill
+
+一个**自包含的 skill bundle**：`SKILL.md` + `scripts/wbsearch.mjs`。
+它不直连上游，而是打**本机网关**的 `/v1/search` / `/v1/webfetch`，
+所以不需要任何 token，只要网关在跑 —— 这正是不把 token 随 skill 分发的原因。
+
+> **维护要点**：改网关端点路径或 `config.json` 的字段名时，记得同步
+> `scripts/wbsearch.mjs` 的 `resolveTarget()`（它从 `~/.workbuddy-api/config.json`
+> 读 `host` / `port` / `apiKey`，环境变量 `WORKBUDDY_GATEWAY_URL` /
+> `WORKBUDDY_API_KEY` 优先）。
+
 ### `src/ratelimit.js` — 限流规避
 
 上游的限流原文（实测抓到的）：
@@ -459,6 +491,7 @@ HTTP 429  {"code":6004,
 | **改限流识别** | `ratelimit.js` 的 `parseRateLimitReset` / `isRateLimited` | `gateway.js` 的换模型重试；`README.md` 的限流一节 |
 | **加一个媒体工具** | `media-tools.js` 定义 + `miora.js` 的 submit | `agent.js` 的执行分派；description 的排除条款；`test-agent.mjs` |
 | **改画图/视频链路** | `miora.js` | 临时凭据的缓存与切号重取；`README.md` 的链路图 |
+| **改联网搜索/抓取** | `search.js` | `gateway.js` 的 `/v1/search`、`/v1/webfetch` 路由；`skills/` 里的 `wbsearch.mjs`；`UPSTREAM.md` |
 | **改用量记录字段** | `usage.js` 的 `summarizeUsage` / `recordUsage` / `aggregate` | `bin.js` 的 `commandUsage` 输出；`test-usage.mjs` |
 
 ### 改动的通用检查清单

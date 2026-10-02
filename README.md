@@ -5,7 +5,7 @@
 [![Node](https://img.shields.io/badge/Node-20.10%2B-5FA04E?logo=nodedotjs)](#环境要求)
 [![deps](https://img.shields.io/badge/dependencies-0-brightgreen)](#两块东西)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![gateway tests](https://img.shields.io/badge/gateway%20tests-39%20passed-brightgreen)](workbuddy_api/scripts/verify.mjs)
+[![gateway tests](https://img.shields.io/badge/gateway%20tests-57%20passed-brightgreen)](workbuddy_api/scripts/verify.mjs)
 [![protocols](https://img.shields.io/badge/protocols-3-blueviolet)](#四个客户端怎么接)
 
 **把 WorkBuddy 桌面 App 里的账号，变成你自己的本地 AI 网关。**
@@ -29,6 +29,7 @@ pi          ─┘
 |---|---|
 | **一个网关，四种协议** | 同一份账号同时给 Claude Code（Anthropic 协议）、Codex（Responses 协议）、pi / Cline / Aider（OpenAI Chat 协议）、DeepSeek Harness 用 |
 | **多账号** | 同时存好几个 WorkBuddy 号，随时切换用哪个号的积分。**切换不用重启网关** |
+| **联网搜索 / 抓网页** | 把 WorkBuddy 的 `web_search` / `web_fetch` 反代成网关端点；另附一个可拷进其他 CLI / harness 的 skill |
 | **自动签到** | 一键给所有号签到，已签过的自动跳过。实测每个号每天 +100 积分 |
 | **登录不会过期** | token 是 60 天滑动窗口，每次刷新重新给满额 —— 只要不断就永远不用再扫码。自带每日计划任务 |
 | **跨机搬运** | 账号打包成加密文件，新电脑导入即用，不用重新扫码 |
@@ -125,7 +126,7 @@ node src/bin.js accounts import D:\acc.json
 
 | | |
 |---|---|
-| `workbuddy_api` 自带回归 | **39 项全绿**（`node scripts/verify.mjs`） |
+| `workbuddy_api` 自带回归 | **57 项全绿**（`node scripts/verify.mjs`） |
 | 三种协议结构校验 | **38 项**（含流式事件序列、tool_use 往返、多轮回传） |
 | Claude Code 真 CLI | 打通，含工具调用 |
 | 多账号 / 签到 / 续期 / 跨机搬运 | 都在真实账号上端到端跑过 |

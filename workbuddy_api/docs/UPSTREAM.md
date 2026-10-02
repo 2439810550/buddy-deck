@@ -18,8 +18,13 @@
 | 促销标签 | GET | `/console/enterprises/personal/models` | 同上（**仅 CN**） |
 | 个人积分 | POST | `/v2/billing/meter/get-user-resource` | `www.codebuddy.cn`（CN）/ `www.workbuddy.ai`（AI） |
 | 企业积分 | POST | `/v2/billing/meter/get-enterprise-user-usage` | `www.codebuddy.cn`（**仅 CN**） |
+| 联网搜索 | POST | `/agenttool/v1/search` | `copilot.tencent.com`（CN）/ `www.workbuddy.ai`（AI） |
+| 网页抓取 | POST | `/agenttool/v1/webfetch` | 同上 |
 
 **区域判定**：`domain` 为空或非 `*.workbuddy.ai` → CN；否则 AI。见 `regionOf()`。
+
+> `/agenttool/v1/*` 是官方 Agent 的联网工具，和我们发的对话请求打**同一个 host**
+> （`variant.chatBase`），所以不需要单独的 base URL。
 
 ---
 
@@ -135,6 +140,51 @@ CN 企业账号（`enterpriseId` 非空）走 `/v2/billing/meter/get-enterprise-
 
 **区域门是承重的**：企业端点在国际区未经验证，所以国际版即使带了
 `enterpriseId` 也留在个人版路径上。
+
+### `/agenttool/v1/search` 与 `/agenttool/v1/webfetch`（联网能力）
+
+官方 Agent 的联网工具。**认证极简**：只需 `content-type` + `Authorization: Bearer`，
+官方 CLI 另外那堆头（`X-Agent-Intent`、`X-Conversation-ID`、`X-IDE-Type`、
+`X-User-Id`、自定义 UA）逐项实测**全部可省**，去掉仍是 200；
+但 `Bearer ` 前缀不可省。实现在 `src/search.js`。
+
+```jsonc
+// POST /agenttool/v1/search
+{ "query": "...", "type": "text2text", "max_results": 5,
+  "freshness": "d7",                 // 可选
+  "allowed_domains": ["a.com"] }     // ⚠️ 上游不生效，见下
+
+// POST /agenttool/v1/webfetch
+{ "url": "https://...", "format": "markdown", "prompt": "...",
+  "timeout": 20, "max_length": 100000 }
+```
+
+**响应是扁平的**，业务字段和 `code` 同级 —— **不是**套在 `data` 里。
+别照抄计费那套 `readEnvelope` 的取法：
+
+```jsonc
+{ "query": "...", "type": "text2text", "provider": "0",
+  "results": [ { "title": "...", "url": "...", "snippet": "...", "favicon": "..." } ],
+  "total_results": 5, "response_time_ms": 108 }
+```
+
+webfetch 回 `{url, title, content, content_type, content_length, truncated, status_code}`。
+
+#### 两个坑
+
+1. **`allowed_domains` 上游不生效** —— 实测限定 `docs.python.org` 仍会返回
+   百度、CSDN。所以 `src/search.js` 的 `includeDomains` 是**拿到结果后本地过滤**
+   （相等或子域，避免 `a.com` 误配 `nota.com`），并且有过滤时把 `max_results`
+   拉满再筛，免得筛完不够数。`excludeDomains` 则折成 query 里的 `-site:` 语法
+   （官方 CLI 的做法）。
+2. **`freshness` 语法**：`d1`–`d30` / `m1`–`m12` / `y1`–`y5`，数字可省
+   （`d` 等于 `d1`）。本地会先校验，非法值直接 400，不让它白跑一趟上游。
+
+#### 认证失败的分类
+
+`src/search.js` 把 HTTP 401/403 一律映射成 `UNAUTHORIZED`（→ 对外 401，
+`authentication_error`），**绝不静默降级成空结果** —— 否则用户会以为"没搜到"，
+而真相是登录态没了。
 
 ---
 
@@ -275,6 +325,8 @@ ELECTRON_RUN_AS_NODE=1 <WorkBuddy 二进制> -e 'process.stdout.write(String(pro
 | 积分显示 0 但实际有 | 企业账号走了个人端点 | `fetchCredits` 的区域门 |
 | 401 被报成 400 | 裸 401 分类被改回落到 `client` | `classifyUpstreamError` |
 | 错误里只有一坨 JSON，看不到原因 | `displayMsg` 提取失效 | `extractDisplayErrorMessage` |
+| 搜索总是返回 CSDN/百度 | `includeDomains` 的本地过滤被去掉（上游本就不生效） | `search.js` 的 `search()` |
+| 搜索报「没搜到」但实际是登录失效 | 401 被降级成空结果 | `search.js` 的 `unwrap()` |
 
 **改完一定要跑 `node scripts/verify.mjs`**，它会覆盖上面表里的大部分路径。
 只想零成本验证时：`scripts/test-agent.mjs` + `test-miora.mjs` + `test-usage.mjs`，

@@ -157,11 +157,12 @@ ELECTRON_RUN_AS_NODE=1 "<WorkBuddy 二进制>" -e 'process.stdout.write(String(p
 node scripts/test-agent.mjs    # 离线协议测试
 node scripts/test-miora.mjs    # 离线画图测试
 node scripts/test-usage.mjs    # 离线用量测试
+node scripts/test-search.mjs   # 离线搜索/抓取测试
 node src/bin.js doctor         # 登录态 / 凭据格式 / 二进制定位
 node src/bin.js models         # 目录还能不能刷新
 ```
 
-同步协议层时这五条足够，且**不消耗积分**。改了对话/计费主链路再加跑
+同步协议层时这几条足够，且**不消耗积分**。改了对话/计费主链路再加跑
 `node scripts/verify.mjs`（会花钱）。任何 FAIL 都意味着同步引入了回归。
 
 ---
@@ -211,12 +212,13 @@ App 更新比插件更快，且**不需要等插件**——症状会直接出现
 node scripts/test-agent.mjs     # 117 项协议测试（假上游）
 node scripts/test-miora.mjs     # 27 项画图测试（假上游）
 node scripts/test-usage.mjs     # 39 项用量账本测试
+node scripts/test-search.mjs    # 34 项搜索/抓取测试（假上游 + 假网关）
 node src/bin.js doctor          # 登录态 / 凭据格式 / 二进制定位
 node src/bin.js models          # 目录刷新（只读，不花积分）
 ```
 
-前三个启动的是**假上游**，改动协议解析、头部构造、错误分类、SSE 重组时
-它们是最快的回归网。`doctor` / `models` 打真上游但只读，用来确认
+前四个启动的是**假上游**，改动协议解析、头部构造、错误分类、SSE 重组、
+域名过滤时它们是最快的回归网。`doctor` / `models` 打真上游但只读，用来确认
 "凭据还能解开、目录还能刷新"。
 
 ### 3.2 一键端到端验证（会花钱）
@@ -268,7 +270,7 @@ node scripts/verify.mjs
 2. 读 docs/ARCHITECTURE.md 找到对应模块
 3. 读 docs/UPSTREAM.md 确认协议契约没理解错
 4. 改代码（保持依赖方向单向）
-5. 零成本验证：test-agent / test-miora / test-usage + doctor/models
+5. 零成本验证：test-agent / test-miora / test-usage / test-search + doctor/models
 6. 改了对话主链路再跑 node scripts/verify.mjs
 7. 手工补测 3.3 里相关项
 8. 更新"同步历史" + 必要时更新 UPSTREAM.md / PATCHES.md

@@ -68,6 +68,8 @@
 | `src/miora.js` | 画图（文生图 / 改图） |
 | `src/usage.js` | 用量账本 |
 | `src/ccswitch.js` | CC Switch 集成 |
+| `src/search.js` | 联网搜索 / 抓网页（反代 `/agenttool/v1/*`） |
+| `skills/workbuddy-web-search/` | 可分发到其他 harness 的 skill bundle（打本机网关） |
 | `src/config.js`、`src/paths.js`、`src/build-id.js` | 配置、状态目录、构建指纹 |
 | `src/bin.js` | CLI（上游 `bin.ts` 只是 DSH 诊断入口，本地扩展成完整 CLI） |
 | `scripts/verify.mjs`、`scripts/test-*.mjs` | 本地验证脚本（上游没有 `verify.mjs`） |
@@ -182,7 +184,14 @@
 | agent 工具循环 | `agent.js` | 本地工具 vs 客户端工具的分派 |
 | 用量账本 | `usage.js` | 记上游真实 `credit` 扣费 |
 | CC Switch 集成 | `ccswitch.js` | |
-| 完整 CLI | `bin.js` | `serve/status/models/doctor/logout/config/accounts/checkin/ccswitch/usage` |
+| **联网搜索 / 抓网页** | `search.js` + `/v1/search`、`/v1/webfetch` | 反代官方 Agent 的 `web_search` / `web_fetch` |
+| **可分发的 skill** | `skills/workbuddy-web-search/` | 给其他 CLI/harness 用；打本机网关，不携带 token |
+| 完整 CLI | `bin.js` | `serve/status/models/doctor/logout/config/accounts/checkin/ccswitch/usage/search` |
+
+> **联网模块（`search.js`）同步时**：上游没有对应的独立模块（那是 DSH 宿主里
+> 的 Agent 工具，本地把它反代成 HTTP 端点）。但**上游接口契约会变** ——
+> 检查 `docs/UPSTREAM.md` 的 `/agenttool/v1/*` 一节，以及上游是否有新的
+> Agent 工具值得一起反代。
 
 ---
 

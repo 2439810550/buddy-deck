@@ -41,6 +41,7 @@ App 里换了账号 / 重新登录，本工具自动跟随，不用重配。国�
 | 文档 | 内容 |
 |---|---|
 | **README.md**（本文） | 安装、接入、命令、常见问题 |
+| [`skills/workbuddy-web-search/SKILL.md`](./skills/workbuddy-web-search/SKILL.md) | **给其他 CLI / harness 用的联网搜索 skill**；拷进目标 harness 即可 |
 | [`docs/PATCHES.md`](./docs/PATCHES.md) | **本地补丁 vs 上游核心对照**；同步上游前必读 |
 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 模块地图、依赖方向、数据流；改代码前必读 |
 | [`docs/UPSTREAM.md`](./docs/UPSTREAM.md) | 上游协议契约：端点、请求头、错误码、协议坑位 |
@@ -111,6 +112,9 @@ src/protocol.js    模型别名解析、token 估算、SSE 写出、stop_reason 
 src/anthropic.js   Anthropic Messages ←→ Chat（含 tool_use 双向、count_tokens）
 src/responses.js   OpenAI Responses ←→ Chat（含 output item 的事件流顺序）
 ```
+
+除了对话，网关还提供**画图/视频**（`/v1/images/*`、`/v1/video/*`）和
+**联网搜索/抓取**（`/v1/search`、`/v1/webfetch`）两组非对话端点。
 
 ## 画图端点（OpenAI 图片接口）
 
@@ -342,6 +346,101 @@ x-anthropic-billing-header: cc_version=2.1.250.7b8; cc_entrypoint=sdk-cli;
 
 ---
 
+## 联网搜索 / 抓网页
+
+网关不只转发聊天和画图 —— **还能联网**。把 WorkBuddy 官方 Agent 的
+`web_search` / `web_fetch` 两个服务端工具反代成 HTTP 端点：
+
+```
+POST /v1/search      联网搜索
+POST /v1/webfetch    抓取网页正文
+```
+
+任何客户端只要知道本网关的 `base_url` + `api_key` 就能用，**不需要自己配置
+任何 WorkBuddy 凭据** —— 网关用自己的登录态去打上游，续期和换号都自动跟上。
+
+### 用法
+
+```bash
+# 搜索（默认回给模型看的 markdown）
+curl http://127.0.0.1:8787/v1/search \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"query":"DeepSeek V4 发布","max_results":5}'
+
+# 时效过滤 + 域名限定
+curl http://127.0.0.1:8787/v1/search \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"query":"AI 芯片","freshness":"d7","include_domains":["36kr.com"]}'
+
+# 要结构化数据
+curl http://127.0.0.1:8787/v1/search \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"query":"关键词","format":"json"}'
+
+# 抓网页（prompt 让上游按你的意图提取，而不是整页倒出来）
+curl http://127.0.0.1:8787/v1/webfetch \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com","prompt":"总结要点"}'
+```
+
+命令行也能直接用：
+
+```bash
+node src/bin.js search "DeepSeek V4 发布" --max 5
+node src/bin.js search "AI 芯片" --freshness d7
+node src/bin.js search "python asyncio" --sites docs.python.org
+node src/bin.js search "某话题" --exclude csdn.net
+node src/bin.js search "关键词" --json
+node src/bin.js search --url https://example.com --prompt "总结要点"
+```
+
+### 参数
+
+| 字段 | 别名 | 说明 |
+|---|---|---|
+| `query` | `q` | **必填**，至少 2 个字符 |
+| `max_results` | `maxResults` | `1`–`20`，默认 `5` |
+| `freshness` | | `d1`–`d30` / `m1`–`m12` / `y1`–`y5`；单独写 `d` 等于 `d1` |
+| `include_domains` | `includeDomains` / `sites` | 只要这些域名（**本地过滤**，见下） |
+| `exclude_domains` | `excludeDomains` / `exclude` | 排除这些域名 |
+| `format` | | `markdown`（默认，回 `text/plain`）或 `json` |
+
+抓取 `POST /v1/webfetch` 额外认 `url`（必填）、`prompt`、`content_format`、
+`timeout`、`max_length`。数组字段同时接受数组与逗号分隔字符串。
+
+### 两个坑
+
+1. **`include_domains` 是网关本地过滤的。** 上游的 `allowed_domains` 实测
+   **不生效** —— 限定 `docs.python.org` 仍会返回百度、CSDN。所以网关拿到结果后
+   自己按域名筛（相等或子域，避免 `a.com` 误配 `nota.com`），有筛选时会把
+   `max_results` 拉满再筛，免得筛完不够数。
+
+2. **认证失败绝不静默降级。** 401/403 一律回 401 + `authentication_error`，
+   不会返回空列表 —— 否则「登录失效」会伪装成「没搜到」。
+
+### 给其他 CLI / harness 用（skill）
+
+`skills/workbuddy-web-search/` 是一个**可直接分发**的 skill bundle
+（`SKILL.md` + `scripts/wbsearch.mjs`）：
+
+```bash
+node skills/workbuddy-web-search/scripts/wbsearch.mjs "关键词" --max 5
+```
+
+它不直连上游、**不携带 token**，只打本机网关；网关地址与密钥自动从
+`~/.workbuddy-api/config.json` 读（也可用 `WORKBUDDY_GATEWAY_URL` /
+`WORKBUDDY_API_KEY` 覆盖）。
+
+> 想让其他 harness 用上，把整个 `skills/workbuddy-web-search/` 目录拷进它的
+> skills 目录即可。**推荐先把密钥固定下来**，否则网关每次启动随机生成、
+> skill 每次都要重新配：
+>
+> ```bash
+> node src/bin.js config --set apiKey=sk-your-key
+> ```
+
+---
+
 ## 接各种客户端
 
 ### OpenAI SDK（Python / Node）
@@ -415,7 +514,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 ## 命令一览
 
 ```
-workbuddy-api <serve|status|models|doctor|logout|config|accounts|checkin|ccswitch|usage> [选项]
+workbuddy-api <serve|status|models|doctor|logout|config|accounts|checkin|ccswitch|usage|search> [选项]
 ```
 
 | 命令 | 作用 |
@@ -427,13 +526,14 @@ workbuddy-api <serve|status|models|doctor|logout|config|accounts|checkin|ccswitc
 | `accounts` | 多账号：列出 / `add` / `use <id>` / `clear` / `remove <id>` / `rename <id> <名>` / `renew [id]` / `export` / `import <file>` |
 | `checkin` | 给保险库里的账号签到（默认全部，或 `--id <id>`） |
 | `usage` | 用量账本：按模型/账号汇总真实扣费（见下） |
+| `search` | 联网搜索 / 抓网页（见「联网搜索 / 抓网页」一节） |
 | `ccswitch` | 把本网关镜像进 CC Switch 的供应商列表（见下） |
 | `logout` | **只**删除本工具自己的凭据副本，不动 App 的登录 |
 | `config` | 读写持久化配置 |
 
 加 `--json` 可输出机器可读格式：`status` / `models` / `doctor` / `accounts` /
-`checkin` / `usage` / `ccswitch --status` 全部支持，**包括"没有数据"时也回合法 JSON**
-（脚本可以放心解析）。
+`checkin` / `usage` / `search` / `ccswitch --status` 全部支持，
+**包括"没有数据"时也回合法 JSON**（脚本可以放心解析）。
 
 > 完整的选项列表随时可以用 `node src/bin.js --help` 看 —— **那是唯一的准确来源**，
 > 本文只讲常用组合。
