@@ -19,11 +19,31 @@
     <InvariantGlobalization>false</InvariantGlobalization>
     <!-- 零第三方依赖：只用 WPF + BCL -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+
+    <!--
+      exe 的图标。任务栏、文件列表、Alt+Tab、快捷方式都读它。
+
+      由 tools/make-icon/make_whale_icon.py 生成 ——
+      别手改 Assets/app.ico，改那个脚本再重新生成。
+    -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <Using Remove="System.Windows.Forms" />
     <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      把图标作为**资源**嵌进程序集 —— 托盘图标要读它。
+
+      为什么不直接用 ApplicationIcon：那个只影响 exe 的文件图标，
+      运行时读不到。托盘要在代码里拿到图标数据，所以得用 Resource。
+
+      （这两个是两回事，可以同时设到同一个文件上。）
+    -->
+    <Resource Include="Assets\app.ico" />
   </ItemGroup>
 
   <ItemGroup>

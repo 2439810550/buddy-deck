@@ -11,7 +11,11 @@ namespace WorkBuddyPanel;
 /// 存在的意义：这个程序要在后台长期挂着网关，让用户一直盯着一个大窗口是不可接受的。
 /// 有了托盘，关窗口 = 收进托盘（网关继续跑），托盘菜单里能开关网关、设置开机自启、真正退出。
 ///
-/// 图标不依赖任何 .ico 资源文件，是运行时用 GDI+ 画出来的，省得往仓库里塞二进制。
+/// 图标优先读嵌入资源 Assets/app.ico（鲸鱼娘）—— 跟 exe 图标同一个文件，
+/// 由 tools/make-icon/make_whale_icon.py 生成。
+///
+/// 读不到时退回运行时画的字母图标（见 CreateFallbackGlyph）。留兜底的理由：
+/// 托盘图标画不出来 = 用户在托盘里找不到程序，那比「图标不好看」严重得多。
 /// </summary>
 public sealed class TrayIcon : IDisposable
 {
@@ -45,7 +49,7 @@ public sealed class TrayIcon : IDisposable
         _isGatewayRunning = isGatewayRunning;
         _canStartGateway = canStartGateway;
 
-        _glyph = CreateGlyph();
+        _glyph = CreateTrayIcon();
 
         _openItem = new WinForms.ToolStripMenuItem("打开控制面板", null, (_, _) => onOpenPanel())
         {
@@ -142,7 +146,49 @@ public sealed class TrayIcon : IDisposable
     private void Exit() => _onExit();
 
     /// <summary>运行时画一个圆底白字的图标，避免往仓库里放 .ico。</summary>
-    private static Icon CreateGlyph()
+    /// <summary>
+    /// 托盘图标：优先用打包进来的 Assets/app.ico。
+    ///
+    /// 为什么专门读资源而不是直接用 CreateFallbackGlyph：
+    /// 托盘图标是用户看得最久的（程序常驻在托盘），那里用鲸鱼娘
+    /// 比一个字母 W 有辨识度。
+    ///
+    /// 为什么必须有兜底：托盘图标画不出来 = 用户在托盘里找不到程序。
+    /// 那比「图标不好看」严重得多，所以任何异常都退回画图。
+    /// </summary>
+    private static Icon CreateTrayIcon()
+    {
+        try
+        {
+            // pack://application:,,,/ —— 三个逗号是 WPF 的固定写法，
+            // 不能省（一个或两个都解析失败）。
+            var uri = new Uri("pack://application:,,,/Assets/app.ico", UriKind.Absolute);
+            var res = System.Windows.Application.GetResourceStream(uri);
+            if (res is not null)
+            {
+                using var stream = res.Stream;
+                // Icon 构造器会自己从多尺寸 ico 里挑合适的那档 ——
+                // 这正是 app.ico 里塞 16/20/24/32/40/48/64/128/256 的意义。
+                return new Icon(stream);
+            }
+        }
+        catch (Exception ex)
+        {
+            // 资源丢了 / WPF 资源系统还没起来 / ico 坏了 —— 都不该让程序挂
+            System.Diagnostics.Debug.WriteLine($"[托盘] 读图标资源失败，退回画的图标：{ex.Message}");
+        }
+
+        return CreateFallbackGlyph();
+    }
+
+    /// <summary>
+    /// 兜底图标：运行时用 GDI+ 画一个蓝色圆圈 + 字母 W。
+    ///
+    /// 这是加 Assets/app.ico 之前的老实现。留着两个用处：
+    ///   · 图标资源读不到时不至于没有托盘图标
+    ///   · 也是「纯代码生成图标」的一个可参考实现
+    /// </summary>
+    private static Icon CreateFallbackGlyph()
     {
         const int size = 32;
         using var bitmap = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);

@@ -62,6 +62,11 @@ OutputDir=dist
   #define OutputSuffix ""
 #endif
 OutputBaseFilename={#AppName}-Setup-{#AppVersion}{#OutputSuffix}
+
+; 安装包自己的图标（下载下来那个 Setup.exe 长什么样）。
+; 跟程序图标同一个文件 —— 由 tools/make-icon/make_whale_icon.py 生成。
+SetupIconFile=Assets\app.ico
+
 Compression=lzma2/max
 SolidCompression=yes
 LZMAUseSeparateProcess=yes
