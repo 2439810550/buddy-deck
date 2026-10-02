@@ -282,7 +282,37 @@ public sealed class AccountRowVm : ObservableObject
 public sealed partial class MainViewModel
 {
     /// <summary>保险库里的账号。</summary>
-    public ObservableCollection<AccountRowVm> Accounts { get; } = [];
+    /// <summary>
+    /// 账号列表。**整体替换，不做增量改动。**
+    ///
+    /// 为什么不是只读的 + Clear/Add：
+    ///
+    /// 那样会产生 N+1 次 CollectionChanged 通知（Clear 一次 + 每行 Add 一次）。
+    /// WPF 每收到一次就重排一遍，中间那些「列表只有 3 行」「只有 7 行」的
+    /// 瞬间状态会被布局抓到 —— 而虚拟化面板正好在这些瞬间生成/回收容器，
+    /// 生成器状态不一致，InsertContainer 里对 null 解引用：
+    ///
+    ///     NullReferenceException
+    ///       at VirtualizingStackPanel.InsertContainer(...)
+    ///
+    /// 实测：启动后立刻切到账号页能稳定复现（27 ~ 600 次异常）。
+    ///
+    /// 整体替换只有一次 PropertyChanged（ItemsSource 变了），WPF 直接换掉
+    /// 整个 CollectionView，没有中间状态可抓。
+    /// </summary>
+    private ObservableCollection<AccountRowVm> _accounts = [];
+    public ObservableCollection<AccountRowVm> Accounts
+    {
+        get => _accounts;
+        private set
+        {
+            if (Set(ref _accounts, value))
+            {
+                Raise(nameof(HasAccounts));
+                Raise(nameof(HasNoAccounts));
+            }
+        }
+    }
 
     public AsyncRelayCommand RefreshAccountsCommand { get; private set; } = null!;
     public AsyncRelayCommand RefreshAccountsLightCommand { get; private set; } = null!;
@@ -1106,16 +1136,28 @@ public sealed partial class MainViewModel
             //
             // 而且这个异常会被启动路径上的 fire-and-forget 吞掉，
             // 表现是“账号列表永远空着” —— 很难查。
+            // 先把新的一批行**在后台线程上构造好**，再一次性换上。
+            //
+            // 为什么不在 UI 线程里边建边加：AccountRowVm 的构造函数里
+            // 要解析 DTO、建命令对象，18 个号就是 18 次；放在 UI 线程上
+            // 会卡一下界面。构造阶段不碰任何绑定，后台做是安全的。
+            var fresh = new ObservableCollection<AccountRowVm>();
+            foreach (var account in rows)
+            {
+                var row = new AccountRowVm(this, account);
+                if (fast && previous.TryGetValue(row.Id, out var prev))
+                    row.CarryOver(prev.CheckinText, prev.RenewText);
+                fresh.Add(row);
+            }
+
+            // 换上 / 记池 都必须在 UI 线程 —— 前者会触发绑定刷新，
+            // 后者是普通字段但和界面状态同步，一起做。
+            //
+            // 注意 RunOnUiThread 是**排队**执行的（BeginInvoke + DataBind 优先级），
+            // 不是插队 —— 所以这次替换一定发生在当前布局跑完之后。
             RunOnUiThread(() =>
             {
-                Accounts.Clear();
-                foreach (var account in rows)
-                {
-                    var row = new AccountRowVm(this, account);
-                    if (fast && previous.TryGetValue(row.Id, out var prev))
-                        row.CarryOver(prev.CheckinText, prev.RenewText);
-                    Accounts.Add(row);
-                }
+                Accounts = fresh;
 
                 // 记下这批数据属于哪个池 —— 轻量刷新靠它判断能不能做「就地更新」。
                 // 如果不一致，轻量刷新就跳过去，让完整刷新去重建。

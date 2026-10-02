@@ -1155,7 +1155,31 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// 为什么要"等"：调用方（比如 RefreshEnvironment）后面还要用集合的结果，
     /// 不等的话会先返回、状态显示成旧的。
     /// </summary>
-    private static void RunOnUiThread(Action action)
+    /// <summary>
+    /// 在 UI 线程上执行一段代码，**排在当前这一拍之后**。
+    ///
+    /// ⚠ 这里不能用「已经在 UI 线程就直接执行」的写法（以前是那样）。
+    ///
+    /// 原因是集合改动会打断正在进行的布局。实测的崩溃链条：
+    ///
+    ///   启动后立刻切到账号页
+    ///     → ListBox 开始为各行生成容器（Measure 进行中）
+    ///     → 同时账号刷新在改 Accounts（Clear + Add，每行一次 CollectionChanged）
+    ///     → 虚拟化面板的容器生成器状态不一致
+    ///     → NullReferenceException at VirtualizingStackPanel.InsertContainer
+    ///     → 异常处理器弹模态窗 → 重入布局 → 又抛 → 连环 → 栈溢出 → 闪退
+    ///
+    /// 关键点在于：调用方往往是 async 方法，await 之后已经回到 UI 线程，
+    /// 所以 CheckAccess() 为 true —— 那种情况下「直接执行」等于**插队**，
+    /// 可能正插在一轮 Measure 中间。
+    ///
+    /// 改成一律 BeginInvoke 排队，并按优先级排到布局/渲染之后。
+    /// 这样集合改动永远发生在布局做完了的时刻。
+    ///
+    /// @param action 要执行的代码
+    /// @param wait true = 等它跑完再返回（调用方需要立刻看到结果时用）
+    /// </summary>
+    private static void RunOnUiThread(Action action, bool wait = true)
     {
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
 
@@ -1166,13 +1190,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        if (dispatcher.CheckAccess())
-        {
-            action();
-            return;
-        }
+        // 排到布局/渲染之后。
+        //
+        // 用 DataBind 而不是 Background/Normal：DataBind 排在 Measure
+        // 之后、Render 之前，是「改数据不会打断布局」的最早时机。
+        var op = dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.DataBind,
+            new Action(action));
 
-        dispatcher.Invoke(action);
+        if (wait) op.Wait();
     }
 
     /// <summary>体检结果里“缺了什么”，给首页那张警告卡用。</summary>
