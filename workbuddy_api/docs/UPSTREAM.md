@@ -41,8 +41,16 @@ Content-Type: application/json
 X-User-Id: <uid>            # uid 为空时改发 X-No-User-Id: 1
 X-Enterprise-Id: <id>       # 无企业时改发 X-No-Enterprise-Id: 1
 X-Domain: <domain>          # domain 为空时改发 X-No-Department-Info: 1
+X-IDE-Type: WorkBuddy       # IDE 归属标识（插件 0.6.3 / issue 54）
+X-IDE-Name: WorkBuddy
+X-IDE-Version: <app 版本>    # 与 UA 里的版本号同源
 X-Product: SaaS
 ```
+
+> `X-IDE-*` 三个头只出现在**对话与探测**请求上。刷新、目录、计费**不带**——
+> 这是上游测试里钉住的不变量，别顺手加到 `commonHeaders()` 里去。
+> `X-IDE-Version` 必须与 UA 中的 `WorkBuddy/<v>` 同源；两者由**同一次**
+> 身份解析产生（`chatIdentity()`），不允许各算各的。
 
 **User-Agent 在对话请求里会被替换**为桌面客户端形态
 （`WorkBuddy/<v> WorkBuddy/<v> CLI/<cli>`，国际版产品段是 `WorkBuddy AI`）。
@@ -138,13 +146,36 @@ CN 企业账号（`enterpriseId` 非空）走 `/v2/billing/meter/get-enterprise-
 | 分类 | 触发条件 | 网关对外状态码 |
 |---|---|---|
 | `hard_credit` | HTTP 402，或 msg 含"积分不足/额度不足/payment required"等 | 402 |
+| `session_dead` | **HTTP 401（无条件）**，或 msg 含 `Offline user session not found` / `12153` | 401 |
 | `soft_rate` | HTTP 429 | 429 |
-| `session_dead` | msg 含 `Offline user session not found` 或 `12153` | 401 |
 | `not_found` | HTTP 404 | 502 |
 | `server` | HTTP ≥ 500 | 502 |
 | `client` | 其余 4xx | 400 |
 
+> **裸 401 无条件算 `session_dead`**（上游 PR #58）。401 在这个上游没有业务
+> 含义，所以不看 body；判断放在积分标记**之前**，避免一个"body 里恰好提到积分"
+> 的 401 被误判成 `hard_credit`。`Offline user session not found` / `12153`
+> 这两个标记仍然有用——它们还能抓住**以 403 回复**的死会话。
+
 `session_dead` 意味着需要用户去 App 重新登录。
+
+### 错误文案：优先 `displayMsg`
+
+业务错误（安全审核、非法请求）上游回的是结构化 `displayMsg`：
+
+```jsonc
+{ "code": 11128, "msg": "Illegal API invocation",
+  "displayMsg": { "zh": "该渠道未获授权", "en": "unapproved channel" } }
+```
+
+`extractDisplayErrorMessage()` 按 `displayMsg.zh` → `displayMsg.en` → `msg` 顺序
+取第一段非空文本；非 JSON 或非对象返回 `undefined`，调用方退回原始摘录。
+网关用它替换掉"整包 JSON 糊在错误里"的旧行为。
+
+> **本地与上游 DSH 插件的分歧（有意）**：插件会在 401/403 且非 `session_dead`
+> 时**删掉** `(http N)`，因为 DSH 宿主按错误文本里的 `401`/`403` 字样把业务错误
+> 误判成 AUTH。**本网关按 `kind` 分类、不解析文本**，所以保留 `(http N)`——
+> 这里它是诊断信息。同步时不要照抄插件那行。
 
 ---
 
@@ -200,6 +231,22 @@ ELECTRON_RUN_AS_NODE=1 <WorkBuddy 二进制> -e 'process.stdout.write(String(pro
 ```
 返回 `{version:1, atRestSecretKey:"<base64 32字节>", atRestDeveloperPublicKey:{...}}`。
 
+### 二进制定位：本地是**简化版**
+
+解密算法忠实于上游，但**找二进制这一步本地简化了**，且它与上游的差距是
+已知技术债（见 [`PATCHES.md`](./PATCHES.md) 的 3.3 / 6.1）：
+
+| 能力 | 上游插件 v0.7.1 | 本地 |
+|---|---|---|
+| 每产品独立环境变量 | `WORKBUDDY_ELECTRON_BIN` + `WORKBUDDY_AI_ELECTRON_BIN` | 只有前者 |
+| Windows 候选校验 | exe basename + 同目录 `version` + `resources/app.asar` 布局 | **只读注册表 `UninstallString`，不校验** |
+| 注册表 DisplayName | 按产品各自的严格正则 | 宽松 `WorkBuddy\b` |
+
+> ⚠️ **已知跨产品误匹配**：`/DisplayName\s+REG_SZ\s+WorkBuddy\b/u` 也会匹配
+> 国际版的 `WorkBuddy AI 5.6.2`（`y` 与空格之间是词边界）。在同时装了国内版与
+> 国际版的 Windows 机器上，国际版变体可能解析到**国内版**的二进制。
+> 本机只装国内版所以没暴露；**要支持国际版加密凭据前必须先修这里**。
+
 ---
 
 ## 上游变更了怎么办
@@ -220,10 +267,15 @@ ELECTRON_RUN_AS_NODE=1 <WorkBuddy 二进制> -e 'process.stdout.write(String(pro
 | 解密报 `encrypted-credential-unreadable` | AAD 框架或算法变了；或 key 不匹配 | 同上，先用临时脚本验证 helper 输出 |
 | `models` 一直是 `builtin` | 目录端点变了 / UA 分流规则变了 | `variants.js` 的 `catalogPath` + `upstream.js` |
 | 模型清单和 App 里不一致 | UA 形态不对（拿到的是另一个 agent 的花名册） | `client-identity.js` |
+| UA 里的版本号永远是 `5.5.6` | 身份解析的字段名错位（本地已修，别改回去） | `client-identity.js` 的 `resolveAppVersion` |
 | 对话 400 `11101` | 有人去掉了强制流式 | `prepareChatBody` |
 | 对话 400 `11128` | developer 改写失效；或国际版缺前置 system | `prepareChatBody` / `prepareInternationalChatBody` |
 | 客户端凭空多出工具调用 | `sanitizeChunk` 没删空 `function_call` | `gateway.js` |
 | 促销徽章不显示 | Console 文档请求失败（这是允许的降级） | `fetchPromoBadges` |
 | 积分显示 0 但实际有 | 企业账号走了个人端点 | `fetchCredits` 的区域门 |
+| 401 被报成 400 | 裸 401 分类被改回落到 `client` | `classifyUpstreamError` |
+| 错误里只有一坨 JSON，看不到原因 | `displayMsg` 提取失效 | `extractDisplayErrorMessage` |
 
 **改完一定要跑 `node scripts/verify.mjs`**，它会覆盖上面表里的大部分路径。
+只想零成本验证时：`scripts/test-agent.mjs` + `test-miora.mjs` + `test-usage.mjs`，
+再加 `doctor` / `models`（都不消耗积分）。

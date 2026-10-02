@@ -19,18 +19,37 @@ CLI 入口 (bin.js)
    ├── 目录 (catalog.js) ─── 模型清单：上游实时 → 按账号缓存 → 内置兜底
    │        └── 数据 (models.cn.json / models.ai.json)
    │
+   ├── 账单 (usage.js) ───── 用量账本（记上游给的真实 credit）
+   ├── 多账号 (accounts.js) ─ 保险库 + AccountRouter
+   ├── 签到 (checkin.js) ─── 每日签到
+   ├── 搬运 (transfer.js) ── 账号跨机加密导出/导入
+   ├── CC Switch (ccswitch.js) ─ 镜像进 CC Switch 供应商列表
+   ├── 指纹 (build-id.js) ── /healthz 的 buildId + stale
+   │
    └── 网关 (gateway.js) ─── 本地 OpenAI 兼容 HTTP 服务
             ├── 协议适配 (anthropic.js) ── Anthropic Messages ←→ Chat
             │        └── 公共零件 (protocol.js)  ← 模型别名 / token 估算 / SSE
-            └── 协议适配 (responses.js) ── OpenAI Responses ←→ Chat
+            ├── 协议适配 (responses.js) ── OpenAI Responses ←→ Chat
+            ├── 限流规避 (ratelimit.js) ── 429 后自动换模型
+            ├── agent 循环 (agent.js) ─── 网关自己执行注入的媒体工具
+            │        └── 工具定义 (media-tools.js) ← 判断"是不是我们的工具"
+            └── 画图 / 视频 (miora.js) ── 注入 miora 实例给 agent（走 ctx，不是 import）
 ```
 
-**依赖方向是单向的**，从左到右：`gateway` 依赖 `catalog`/`upstream`/`auth`，
-`upstream` 依赖 `client-identity`，`auth` 依赖 `desktop-credential-protection`。
-没有任何反向依赖，也没有循环。新增模块时请保持这个方向。
+**依赖方向是单向的**：`gateway` 依赖 `catalog`/`upstream`/`auth`/`agent`/`miora`
+等；`upstream` 依赖 `client-identity`；`auth` 依赖 `desktop-credential-protection`；
+`catalog` 依赖 `paths`/`variants`/`upstream`；`agent` 依赖 `upstream`/`media-tools`。
+没有反向依赖，也没有循环。新增模块时请保持这个方向。
+
+> **`agent.js` 不 import `miora.js`**：它通过调用方给的 `ctx.miora` 使用，
+> 所以 `agent` 可测试（测试里塞一个假的 miora）。别为了"省参数"改成直接 import。
+
+> **`variants.js` 是唯一允许出现"两个版本行为不同"的地方**——其他模块不许写
+> `if (region === "global")`，要加就加描述符字段。
 
 **唯一的外部依赖是 Node 内置模块。** 这是刻意选择的：项目要能被直接 `git clone`
 运行，不需要 `npm install`。不要为了省事引入第三方包。
+（唯一的例外是 `ccswitch.js` 的 `node:sqlite`——仍是内置模块，但需要 Node 22.5+。）
 
 ---
 
@@ -92,9 +111,11 @@ WorkBuddy 5.6 起，App 把 `accessToken` / `refreshToken` 加密存储，文件
 后者是个人数据。这个边界是有意划的，别顺手扩大。
 
 **二进制定位顺序**（`defaultElectronPaths`）：
-Windows 先查注册表 `UninstallString`（能覆盖装在任意盘的情况，本机即
-`D:\sqsoftware\workbuddy`），再查常规安装根；macOS 用固定路径；Linux 返回空
-——因为没验证过布局，猜错会执行错误的二进制。
+Windows 先查注册表 `UninstallString`（能覆盖装在任意盘的情况），再查常规安装根；
+macOS 用固定路径；Linux 返回空——因为没验证过布局，猜错会执行错误的二进制。
+
+> ⚠️ 这是**本地简化版**：只认 `WORKBUDDY_ELECTRON_BIN`、且注册表正则
+> 可能跨产品误匹配。与上游的差距见 [`PATCHES.md`](./PATCHES.md) 3.3 / 6.1。
 
 ### `src/client-identity.js` — UA 版本解析
 
@@ -242,6 +263,93 @@ scrypt(N=16384, r=8, p=1) 派生密钥  →  AES-256-GCM
 > 口令**只走 stdin**，不走命令行参数 —— 参数会出现在进程列表里。
 > `--pass` 保留给脚本用，但文档里要标清楚风险。
 
+### `src/agent.js` — agent 循环（网关自己执行工具）
+
+客户端发来的请求里被注入了生图/生视频工具（见 `media-tools.js`）。模型回
+`tool_calls` 时有个分叉：
+
+- **客户端的工具**（`Read` / `Bash` / `get_weather`）→ 原样交回客户端自己执行
+- **我们的工具**（`workbuddy_` 前缀）→ **网关自己执行**，因为只有网关拿着 Miora
+  的凭证，而且 Claude Code 根本不认识这些工具名
+
+后者的完整循环在 `runAgentNonStreaming` / `runAgentStreaming` 里跑掉，
+对客户端来说就是一次普通的聊天请求。
+
+> **维护要点**：流式路径有一个**缓冲窗口**（`FLUSH_THRESHOLD`）。模型可能先说
+> 「好的我来画」**然后**才发 tool_calls；看到 tool_calls 时那半句已经发给客户端
+> 并被渲染了，工具结果插不进去。所以正文先攒够 N 个字符（或流结束）才放行，
+> 这期间发现是我们的工具就**整轮丢掉**。
+>
+> 阈值不能改成「看到第一个字符就放行」——模型的前言通常很短，正好落在阈值内，
+> 改成立即转发那半句就会漏出去（实测踩过）。
+
+### `src/media-tools.js` — 媒体工具的定义与注入
+
+定义那 4 个工具（文生图 / 改图 / 生视频 / 图生视频）并注入到请求里。
+`description` 直接照抄 WorkBuddy `app.asar` 里 `miora-mcp` 插件的官方措辞，
+再补上「什么时候不该用」的边界说明。
+
+> **维护要点**：只注册客户端**没自带同名工具**的那些。误判会白花额度，
+> 所以 description 里写了大量排除条款。测法见 `scripts/test-tool-intent.mjs`。
+
+### `src/miora.js` — 画图 / 视频（Miora 服务）
+
+生成能力**不是聊天模型**，是独立服务（域名 `public.miora.qq.com`）。
+链路：用保险库里的 JWT 去 `{billingBase}/v2/api-keys` 换一个 15 分钟的临时凭据
+→ 调 Miora 的 submit 端点 → 上游返回 1 小时失效的签名 URL → 下载下来存本地
+→ 客户端通过 `/v1/images/file/<hash>` 取。
+
+> **维护要点**：临时凭据按账号缓存，**切号要重取**，上游说失效要自动重取一次。
+> 文件名是内容的 SHA256 前 24 位，所以同一张图重复下载会覆盖、不会越积越多。
+
+### `src/usage.js` — 用量账本
+
+把上游 `usage` 里的 `credit` 字段（**本次真实扣费**，输入价/输出价/缓存折扣都已算好）
+追加记到 `~/.workbuddy-api/usage.jsonl`。
+
+> **维护要点**：记的是**上游给的**数字，不是本地按 token 估算的——两者不是一回事，
+> 别"优化"成本地计算。文件超 10MB 会轮转成 `usage-*.jsonl`。
+> 写盘失败**不抛异常**（记不上账绝不能让请求失败），但设 `WORKBUDDY_DEBUG=1`
+> 可以把原因打到 stderr。
+
+### `src/ccswitch.js` — CC Switch 集成
+
+CC Switch 切换供应商时是**整体覆盖** agent 配置文件的。如果它的列表里没有本网关，
+用户切一下就把本网关写的配置冲掉、而且列表里也看不见它。所以本模块把当前 agent
+配置里**已有的那份**原样 upsert 进 CC Switch 的库（claude / codex / pi 三个 app_type）。
+
+两条硬约束：**不动 `is_current`**（用哪个供应商是用户的决定）、
+**不改别人的条目**（只动自己那条，id 固定 `workbuddy-local`）。
+
+> **维护要点**：只做**镜像**，不重算配置内容——这样两边永远一致，也不会有
+> "JS 和 C# 各算一遍算不一样"的问题。写之前先备份。
+> 读写走 `node:sqlite`（**需要 Node 22.5+**，Node 20 上这条命令不可用）。
+
+### `src/config.js` / `src/paths.js` — 配置与状态目录
+
+`paths.js` 管 `~/.workbuddy-api`（`WORKBUDDY_API_HOME` 可覆盖），并提供
+`writeFileAtomic`：**并发安全的关键**，写临时文件再 `rename`，读方永远不会读到半截 JSON。
+`config.js` 读写 `config.json`。
+
+> **维护要点**：改刷新/写盘逻辑时别绕过 `writeFileAtomic`。
+> 状态目录下都有什么，见 `README.md` 的「状态目录结构」。
+
+### `src/build-id.js` — 代码指纹
+
+算 `src/` 下所有 .js 的 **mtime + 大小**的短哈希，**只在模块加载时算一次**
+（代表"这个进程启动时加载的代码"）。`/healthz` 回 `buildId` + `stale`，
+面板靠它判断端口上那个网关是不是旧代码，不是就换掉。
+
+> **维护要点**：不要改成每次请求重算——那样代码一改指纹就跟着变，反而失去了
+> "这个进程加载的是哪份代码"的语义。也不用 git commit 当版本：用户机器上可能
+> 没有 git、可能不是仓库、而且未提交的改动 git 反映不出来。
+
+### `src/index.js` — 库入口
+
+把上面这些模块重新导出，供「作为库使用」的场景。新增对外可见的模块/函数时在这里加一行。
+
+---
+
 ### `src/ratelimit.js` — 限流规避
 
 上游的限流原文（实测抓到的）：
@@ -331,7 +439,44 @@ HTTP 429  {"code":6004,
 
 ---
 
+## 常见改动落在哪（路由表）
+
+想改一件事时，**先看这张表**——它能省掉一轮全仓库搜索。
+表里"要动"的列是**必须**改的，"顺带"的列是容易漏的。
+
+| 想做的事 | 要动 | 顺带（容易漏） |
+|---|---|---|
+| **新增一个客户端协议** | 新 `src/<proto>.js`（仿 `anthropic.js`）+ `gateway.js` 的 `handle()` 加路由 + 适配层常量 | `verify.mjs` 加一节；`README.md` 的协议表；媒体工具注入必须走共用层 |
+| **新增一个 variant（产品）** | `src/variants.js` 加描述符 + `src/models.<id>.json` | `bin.js` 的 `--provider` 校验；`index.js` 导出；加密凭据要处理二进制定位（见 `PATCHES.md` 6.1） |
+| **上游加了新请求头** | `upstream.js` 的 `chatHeaders()` / `commonHeaders()` | 确认它该不该出现在 refresh/catalog/billing 上（`X-IDE-*` 只属于 chat）；`UPSTREAM.md` 的头契约表 |
+| **上游改了错误分类** | `upstream.js` 的 `classifyUpstreamError()` | `gateway.js` 的 `KIND_STATUS` 映射；`anthropic.js`/`responses.js` 的 kind→错误类型映射；`UPSTREAM.md` |
+| **上游目录/UA 规则变了** | `variants.js` 的 `catalogPath` + `upstream.js` 的 `fetchModels()` | `client-identity.js` 的 UA 构造；`models.*.json` 兜底；`UPSTREAM.md` |
+| **新的加密凭据方案** | `desktop-credential-protection.js` | `auth.js` 的 `plaintextDesktopAuth()`；`bin.js` 的 `doctor` 诊断；`UPSTREAM.md` |
+| **新增 CLI 命令** | `bin.js` 加 `commandXxx()` + `known` 数组 + `printHelp()` 的 Usage 行 | `README.md` 命令表；`--json` 支持 |
+| **新增环境变量** | 读它的那个模块 | `README.md` 环境变量表；`MAINTENANCE.md` 的环境变量救急表 |
+| **新增状态文件** | `paths.js`（`configPath`/`logPath` 式）+ 用它的模块 | `README.md` 的状态目录结构树；`logout` 要不要一起删 |
+| **改模型别名/默认模型挑选** | `protocol.js` 的 `createModelResolver` | `config.js` 的 `defaultModel`；`WORKBUDDY_DEFAULT_MODEL`；`README.md` 的别名一节 |
+| **改限流识别** | `ratelimit.js` 的 `parseRateLimitReset` / `isRateLimited` | `gateway.js` 的换模型重试；`README.md` 的限流一节 |
+| **加一个媒体工具** | `media-tools.js` 定义 + `miora.js` 的 submit | `agent.js` 的执行分派；description 的排除条款；`test-agent.mjs` |
+| **改画图/视频链路** | `miora.js` | 临时凭据的缓存与切号重取；`README.md` 的链路图 |
+| **改用量记录字段** | `usage.js` 的 `summarizeUsage` / `recordUsage` / `aggregate` | `bin.js` 的 `commandUsage` 输出；`test-usage.mjs` |
+
+### 改动的通用检查清单
+
+```
+1. 先读 PATCHES.md 确认这块是上游核心还是本地 feature（决定能不能"照抄上游"）
+2. 保持依赖方向单向（见上文架构图）
+3. 零第三方依赖 —— 只用 node: 内置模块
+4. 新增"对外可见"的东西 → index.js 加导出
+5. 跑离线三件套：test-agent / test-miora / test-usage
+6. 改了对话主链路 → 加跑 verify.mjs（会花钱）
+7. 更新对应文档（规则见 MAINTENANCE.md 的"文档同步规则"）
+```
+
+---
+
 ## 新增一个 variant 需要改哪里
+
 现有设计让这件事是"加数据"而不是"改逻辑"：
 
 1. `src/variants.js` — 加描述符
@@ -339,9 +484,13 @@ HTTP 429  {"code":6004,
 3. 若有变体专属的上游差异 → 加描述符字段，并在 `upstream.js` 里按字段分支
 4. **不要**在其他模块里散落 `if (id === ...)`
 
+> 注意：加密凭据的**二进制定位**目前是简化版，只认 CN 一套；
+> 真要上线第二个产品前必须先做 `PATCHES.md` 6.1。
+
 ---
 
 ## 相关文档
 
+- [`PATCHES.md`](./PATCHES.md) — 本地补丁 vs 上游核心对照（**同步上游前必读**）
 - [`UPSTREAM.md`](./UPSTREAM.md) — 上游协议契约与变更排查
 - [`MAINTENANCE.md`](./MAINTENANCE.md) — 日常维护手册与同步流程

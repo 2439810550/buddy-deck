@@ -41,17 +41,20 @@ App 里换了账号 / 重新登录，本工具自动跟随，不用重配。国�
 | 文档 | 内容 |
 |---|---|
 | **README.md**（本文） | 安装、接入、命令、常见问题 |
+| [`docs/PATCHES.md`](./docs/PATCHES.md) | **本地补丁 vs 上游核心对照**；同步上游前必读 |
 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 模块地图、依赖方向、数据流；改代码前必读 |
 | [`docs/UPSTREAM.md`](./docs/UPSTREAM.md) | 上游协议契约：端点、请求头、错误码、协议坑位 |
 | [`docs/MAINTENANCE.md`](./docs/MAINTENANCE.md) | 维护手册：与 DSH 插件同步流程、验证清单、同步历史 |
 
-维护者请从 `docs/MAINTENANCE.md` 开始。
+维护者请从 [`docs/PATCHES.md`](./docs/PATCHES.md) 与
+[`docs/MAINTENANCE.md`](./docs/MAINTENANCE.md) 开始。
 
 ---
 
 ## 前置条件
 
 - **Node.js 20.10+ / 22 / 24**（用到 `AbortSignal.any`、`fetch`）
+  - 例外：`ccswitch` 命令需要 **Node 22.5+**（走 `node:sqlite`），其余功能不受影响
 - 已安装并**登录** WorkBuddy 桌面 App（国内版或国际版其一即可）
   - App **5.6+** 的加密凭据需要能访问 App 自己的可执行文件（自动探测；
     探测不到时用 `WORKBUDDY_ELECTRON_BIN` 指定）
@@ -194,23 +197,17 @@ GET /v1/images/file/<hash>.png                客户端随时来取
 | OpenAI Responses | `POST /v1/responses` | Codex |
 | 面板自带的对话 | 走 Chat | WorkBuddy 控制台 |
 
-> **踩过的坑**：第一版只在 Chat 那条路注入了工具。结果 Claude Code 说
-> 「画一只企鹅」模型回「我无法直接绘制图片」，Codex 说「画一个蓝色三角形」
-> 它写了段 SVG 代码 —— 因为 Anthropic / Responses 共用的 `translated()`
-> 里忘了加。现在 `verify.mjs` 有一节专门盯这个（三条协议各测一遍）。
+> ⚠️ **注入必须覆盖每一条协议路径。** 三条适配协议共用 `translated()`，
+> 工具注入要放在**共用**的那一层；只加在某一条上，另外两条的客户端说「画只猫」
+> 时模型会回「我无法直接绘制图片」。`verify.mjs` 有一节专门盯这个（三条协议各测一遍）。
 
 ### 怎么做的
 
-第一版这里写的是**关键词匹配**：命中「画」「生成」就去生图。两个死穴：
+把生成能力做成**工具**注册给模型，**模型自己判断**该不该调、调哪个
+（照 WorkBuddy 自己 `app.asar` 里 `miora-mcp` 插件的做法）。
 
-* **死板**。「生成一个视频」命中「生成」，被当成生图处理 ——
-  用户要视频拿到一张图。补词表只能修一个个案，修不了面。
-* **一接外挂客户端就废**。那段代码前面有个 `!hasToolUse(request)` 判断 ——
-  一看客户端带了 tools 就跳过关键词。于是 Claude Code 里说「画一只猫」，
-  模型只会回「我没办法直接画图哦」。
-
-现在照 **WorkBuddy 自己的做法**（挖 `app.asar` 里那个 `miora-mcp` 插件看出来的）：
-把生成能力做成**工具**注册给模型，**模型自己判断**该不该调、调哪个。
+> 不用关键词匹配（命中「画」「生成」就生图）：那样既死板
+> （「生成一个视频」会被当成生图），又会在客户端自带 tools 时整体失效。
 
 ```
 客户端发请求
@@ -230,21 +227,20 @@ GET /v1/images/file/<hash>.png                客户端随时来取
 **为什么必须网关执行**：Claude Code 不认识 `workbuddy_generate_image`，
 交给它也没用。这条只有网关能走。
 
-### 几个关键取舍
+### 几个关键取舍（都是不变量，别"优化"掉）
 
 **流式下先缓冲再决定。** 模型可能先说「好的我来画」**然后**才发 tool_calls。
-等看到 tool_calls 时那半句已经写给客户端了，而客户端已经把前半句渲染出来了，
-后面的工具结果插不进去。所以网关**先攒着不急着往外写**：攒够 40 个字符
-或流结束才放行；这期间发现是调我们的工具就整轮丢掉，只给最终的干净答复。
+等看到 tool_calls 时那半句已经写给客户端、并被渲染出来了，后面的工具结果插不进去。
+所以网关**先攒着不急着往外写**：攒够 40 个字符或流结束才放行；
+这期间发现是调我们的工具就整轮丢掉，只给最终的干净答复。
 
 **工具执行期间保活。** 生图要 10~30 秒，一个字节都不发。有些客户端有 30 秒
 空闲超时。所以执行期间每 10 秒发一个 SSE 注释行（`: keepalive`）。
 
 **客户端的工具原样交回。** 只有 `workbuddy_` 前缀的工具网关执行。
 客户端自己的（`Read` / `Bash` / `get_weather`）原样返回，让它自己跑 ——
-标准 OpenAI 流程。*（踩过：非流式路径一开始没做这个区分，客户端调
-`get_weather` 结果模型收到「未知工具」，回了一句「天气工具好像不可用」，
-用户看到一切正常，只是永远查不出数据。）*
+标准 OpenAI 流程。**流式和非流式两条路径都要做这个区分**，漏一边会让客户端的工具
+静默失效（模型收到「未知工具」，用户只看到一句正常的客套回复）。
 
 **视频提交就走。** 图片等 10~30 秒没问题，视频要几分钟，等下去客户端早超时了。
 所以视频工具返回 taskId + 查询地址，让模型转告用户。
@@ -419,7 +415,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 ## 命令一览
 
 ```
-workbuddy-api <serve|status|models|doctor|logout|config> [选项]
+workbuddy-api <serve|status|models|doctor|logout|config|accounts|checkin|ccswitch|usage> [选项]
 ```
 
 | 命令 | 作用 |
@@ -427,13 +423,58 @@ workbuddy-api <serve|status|models|doctor|logout|config> [选项]
 | `serve` | 启动 OpenAI 兼容网关（主命令） |
 | `status` | 登录账号、token 到期时间、剩余积分、模型列表来源 |
 | `models` | 模型清单（含积分倍率、是否支持图片、上下文窗口） |
-| `doctor` | 无敏感信息的诊断：登录文件位置、App 版本、目录权限 |
+| `doctor` | 无敏感信息的诊断：登录文件位置、App 版本、二进制定位、目录来源 |
 | `accounts` | 多账号：列出 / `add` / `use <id>` / `clear` / `remove <id>` / `rename <id> <名>` / `renew [id]` / `export` / `import <file>` |
 | `checkin` | 给保险库里的账号签到（默认全部，或 `--id <id>`） |
+| `usage` | 用量账本：按模型/账号汇总真实扣费（见下） |
+| `ccswitch` | 把本网关镜像进 CC Switch 的供应商列表（见下） |
 | `logout` | **只**删除本工具自己的凭据副本，不动 App 的登录 |
 | `config` | 读写持久化配置 |
 
-加 `--json` 可输出机器可读格式（`status` / `models` / `doctor` / `accounts` / `checkin`）。
+加 `--json` 可输出机器可读格式：`status` / `models` / `doctor` / `accounts` /
+`checkin` / `usage` / `ccswitch --status` 全部支持，**包括"没有数据"时也回合法 JSON**
+（脚本可以放心解析）。
+
+> 完整的选项列表随时可以用 `node src/bin.js --help` 看 —— **那是唯一的准确来源**，
+> 本文只讲常用组合。
+
+### 用量账本
+
+每次调用记一行到 `~/.workbuddy-api/usage.jsonl`，记的是**上游返回的真实扣费**
+（`credit` 字段，输入价/输出价/缓存折扣都已经算进去了），不是本地估算：
+
+```bash
+node src/bin.js usage                  # 按模型汇总
+node src/bin.js usage --by account     # 按账号汇总
+node src/bin.js usage --days 7         # 只看最近 7 天
+node src/bin.js usage --json           # 输出 JSON（给脚本用）
+```
+
+> 账本只追加，不轮转；想清空直接删 `usage.jsonl`。
+> `--json` 在账本为空时回 `{"ledger": "...", "empty": true, "reason": "..."}`，
+> 不是一句中文提示——脚本不会解析失败。
+
+### CC Switch 集成
+
+[CC Switch](https://github.com/farion1231/cc-switch) 是「供应商管理器」，切换供应商时
+**整体覆盖** agent 的配置文件。如果它的列表里没有本网关这一条，用户切一下就会把
+本网关写的配置冲掉、而且列表里也看不见它。所以本命令把当前 agent 配置文件里
+**已有的那份**原样镜像进 CC Switch 的库（不重算内容，两边永远一致）：
+
+```bash
+node src/bin.js ccswitch            # 镜像：claude / codex / pi 三个 app_type
+node src/bin.js ccswitch --status   # 只看，不写
+node src/bin.js ccswitch --remove   # 撤销（只删自己那条）
+```
+
+两条硬约束：**不动 `is_current`**（用哪个供应商是用户自己的决定），
+**不改别人的条目**（只 upsert 自己那条，id 固定 `workbuddy-local`）。
+写之前会先备份。
+
+> 库文件是 `~/.cc-switch/cc-switch.db`（SQLite），可用 `CCSWITCH_DB` 覆盖。
+> **需要 Node 22.5+**：读写走 `node:sqlite`，而它是该版本才有的实验特性
+> （Node 20 上这条命令不可用，其余功能不受影响）。Node 会在 **stderr** 打一句
+> `ExperimentalWarning`——用 `--json` 喂脚本时只读 stdout 即可，别把 stderr 合进来。
 
 ### 多账号
 
@@ -535,6 +576,11 @@ node src/bin.js config --set authFile="D:\path\to\workbuddy-desktop.info"
 | `WORKBUDDY_AI_AUTH_FILE` | 国际版 App 登录文件的显式路径 |
 | `WORKBUDDY_ELECTRON_BIN` | App 5.6+ 加密凭据的 key helper 二进制（探测不到时指定） |
 | `WORKBUDDY_MEDIA_TOOLS` | 设 `0` 关掉聊天里的生图/生视频工具（变回纯聊天网关） |
+| `WORKBUDDY_DEFAULT_MODEL` | 客户端要了一个花名册里没有的模型时，改用这个（省得每次传 `--default-model`） |
+| `WORKBUDDY_DEBUG` | 设 `1` 让用量账本在坏记录/写盘失败时把原因打到 stderr（默认静默） |
+| `CCSWITCH_DB` | 指定 CC Switch 的库文件位置（默认 `~/.cc-switch/cc-switch.db`，测试用） |
+
+**优先级**：命令行参数 > 环境变量 > 配置文件 > 内置默认值。
 
 登录文件的默认探测位置（按顺序）：
 
@@ -544,7 +590,8 @@ node src/bin.js config --set authFile="D:\path\to\workbuddy-desktop.info"
 - **macOS**
   - `~/Library/Application Support/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info`
 - **Linux / WSL**
-  - `~/.config/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info`
+  - `$XDG_CONFIG_HOME`（默认 `~/.config`）下的 `CodeBuddyExtension/Data/Public/auth/`
+  - `$XDG_DATA_HOME`（默认 `~/.local/share`）下的同一路径
   - WSL 下还会先探测挂载进来的 Windows 用户目录
 
 国际版只是把文件名换成 `workbuddy-desktop-ai.info`。
@@ -567,17 +614,24 @@ node src/bin.js config --set authFile="D:\path\to\workbuddy-desktop.info"
 - **不写 App 文件**：任何情况下都不会修改 WorkBuddy 自己的登录文件。
 - **刷新失败不等于立刻不可用**：只要旧 token 还没过期，请求照常发出去。
 
-状态目录结构：
+状态目录结构（`~/.workbuddy-api/`，可用 `WORKBUDDY_API_HOME` 整体搬走）：
 
 ```
 ~/.workbuddy-api/
-├── config.json          # 你的配置
-├── auth.cn.json         # 刷新后的凭据副本（0600）
-├── catalog.workbuddy.json    # 上次成功的模型列表缓存
-└── workbuddy-api.log    # 预留
+├── config.json                 # 你的配置
+├── auth.cn.json                # 刷新后的凭据副本（0600）
+├── accounts.cn.json            # 多账号保险库（0600，里面有 refreshToken）
+├── catalog.workbuddy.json      # 上次成功的模型列表缓存（按账号分条）
+├── usage.jsonl                 # 用量账本（追加；坏记录会被轮转成 usage-*.jsonl）
+├── media/                      # 生成的图片/视频（0600，按内容哈希命名）
+├── workbuddy-api.log           # 预留（作为服务运行时用）；日常前台跑不产生
+└── auth.cn.json.<pid>.tmp      # 原子写的临时文件，正常情况下不残留
 ```
 
-`logout` 只删 `auth.*.json`；`rm -rf ~/.workbuddy-api` 可以彻底清理。
+国际版对应 `auth.ai.json` / `accounts.ai.json` / `catalog.workbuddy-ai.json`。
+
+- `logout` 只删 `auth.*.json`，**不动**保险库和账本
+- `rm -rf ~/.workbuddy-api` 才是彻底清理（会一并丢掉多账号和用量历史）
 
 ---
 
@@ -585,7 +639,7 @@ node src/bin.js config --set authFile="D:\path\to\workbuddy-desktop.info"
 
 在本机（Windows + 国内版 WorkBuddy **5.6.2**，凭据为**加密**格式）对真实账号验证过：
 
-- `status` / `models` / `doctor` 正确读取登录态、剩余积分与 16 个模型
+- `status` / `models` / `doctor` 正确读取登录态、剩余积分与模型清单
 - **5.6+ 加密凭据解密**：从 App 二进制取 at-rest 密钥，AES-256-GCM 解开
   `accessToken` / `refreshToken`，并确认 App 的文件未被改动
 - `POST /v1/chat/completions` 流式输出，`data: [DONE]` 正常收尾
@@ -597,10 +651,18 @@ node src/bin.js config --set authFile="D:\path\to\workbuddy-desktop.info"
 - 促销标签从 Console 文档合并（`/v3/config` 本身不携带）
 - 错误透传：模型名错误 → 上游 400 原样带回来；缺密钥 → 401；坏 JSON → 400；跨域 Host → 403
 
-一键复验：
+一键复验（**会真实消耗少量积分**）：
 
 ```bash
-node scripts/verify.mjs     # 39 项检查
+node scripts/verify.mjs
+```
+
+零成本的离线回归（假上游，可重复，不消耗积分 —— 日常改代码优先跑这个）：
+
+```bash
+node scripts/test-agent.mjs     # 117 项：协议解析、工具轮次、SSE 重组
+node scripts/test-miora.mjs     #  27 项：画图链路
+node scripts/test-usage.mjs     #  39 项：用量账本
 ```
 
 ---
@@ -643,8 +705,11 @@ HTTP 429  {"code":6004,
 | 上游 `credits` 有时带 "credits" 后缀 | 显示会中英混杂 | 归一化成裸倍率（`x0.79`） |
 | 目录文档 `/v3/config` 不带促销标签 | 徽章会全部丢失 | 额外读一次 Console 文档按 id 合并（失败可降级） |
 | App 5.6+ 的 token 字段是加密的 | 直接读会拿不到字符串 | 用 App 自身二进制取密钥，内存中解密 |
+| 裸 `401`（body 里没有会话失效标记） | 在这个上游**没有业务含义** | 无条件判为「会话失效」→ 对外 401，提示重新登录 |
+| 业务错误回结构化 `displayMsg` | 直接透传就是一坨 JSON | 优先取 `displayMsg.zh` / `.en`，再退回 `msg` |
 
-排查上游变更的完整对照表见 [`docs/UPSTREAM.md`](./docs/UPSTREAM.md)。
+排查上游变更的完整对照表见 [`docs/UPSTREAM.md`](./docs/UPSTREAM.md)；
+哪些是上游核心、哪些是本地改动，见 [`docs/PATCHES.md`](./docs/PATCHES.md)。
 
 ---
 
@@ -683,10 +748,12 @@ const result = await client.chatStream(credential, JSON.stringify({
 
 **`doctor` 说凭据是 `encrypted` 但读不出来**
 App 5.6+ 的 token 是加密的，需要一个可执行的 App 二进制来取密钥。
-`doctor` 会列出探测过的候选路径；都不对时：
+`doctor` 会列出探测过的候选路径；都不对时用 `WORKBUDDY_ELECTRON_BIN` 指到
+App 的安装目录（Windows 上是 `WorkBuddy.exe`，不是快捷方式）：
 
-```bash
-WORKBUDDY_ELECTRON_BIN="D:\sqsoftware\workbuddy\WorkBuddy.exe" node src/bin.js doctor
+```powershell
+$env:WORKBUDDY_ELECTRON_BIN = "E:\asoftware\workbuddy\WorkBuddy.exe"   # 换成你自己的路径
+node src/bin.js doctor
 ```
 
 （把它写进系统环境变量即可长期生效。）
@@ -718,13 +785,13 @@ WORKBUDDY_ELECTRON_BIN="D:\sqsoftware\workbuddy\WorkBuddy.exe" node src/bin.js d
 
 ## 网关进程的版本识别（`/healthz` 的 `buildId`）
 
-`GET /healthz` 除了 `ok` 还回三个字段：
+`GET /healthz`（无需密钥）：
 
 ```json
 {
   "ok": true,
   "provider": "workbuddy",
-  "models": 16,
+  "models": 17,
   "buildId": "b32cf0a26cab",
   "startedAt": "2026-10-02T00:34:18.894Z",
   "stale": false
@@ -736,28 +803,18 @@ mtime + 大小做 SHA-256，取前 12 位）。
 
 ### 为什么需要它
 
-真实事故：
+端口上可能跑着**几小时前启动的孤儿进程**（父面板已退出）。它不会自动重载，
+代码改了几轮它还是旧的；而面板点「启动网关」时如果只看到「端口有人在监听」
+就采用它，用户看到的现象就是「改了没生效」，排查方向会完全跑偏。
 
-```
-8787 上跑着几小时前启动的网关（孤儿进程，父面板已退出）。
-代码后来改了好几轮 —— 视频从「当成生图处理」改成了真正的视频生成。
-但那个进程不会自动重载，它还在跑旧代码。
-
-用户重启面板 → 面板看到「端口上有人在监听」→ 采用它
-→ 功能还是旧的。用户看到的是「视频还是生成不了」，
-完全不知道为什么，排查方向全跑偏。
-```
-
-现在控制台启动时会拿它的 `buildId` 跟磁盘上的代码比对，
-**不一样就自动把旧网关换掉**（`ProcessReaper` 做三重匹配之后才动手：
-`node.exe` + `bin.js serve` + `--port N`，任何一条对不上就不碰）。
+所以控制台启动时会拿它的 `buildId` 跟磁盘上的代码比对，**不一样就把旧网关换掉**
+（`ProcessReaper` 先做三重匹配才动手：`node.exe` + `bin.js serve` + `--port N`，
+任何一条对不上就不碰）。
 
 ### 为什么不用 git commit 当版本
 
-- 用户机器上可能没有 git
-- 也可能不是 git 仓库（解压安装的场景）
-- 而且「工作区有未提交改动」时 git 反映不出来 —— 但代码确实变了
-
+用户机器上可能没有 git、也可能不是 git 仓库（解压安装的场景）；
+而且**工作区有未提交改动时 git 反映不出来**，但代码确实变了。
 mtime + 大小已经足够区分「代码变了没有」。
 
 ### `stale` 字段
