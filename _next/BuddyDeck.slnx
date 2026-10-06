@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BuddyDeck.Core/BuddyDeck.Core.csproj" />
+    <Project Path="src/BuddyDeck.Gateway/BuddyDeck.Gateway.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BuddyDeck.Core.Tests/BuddyDeck.Core.Tests.csproj" />
+  </Folder>
+</Solution>
