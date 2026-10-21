@@ -5,7 +5,7 @@
 [![Node](https://img.shields.io/badge/Node-20.10%2B-5FA04E?logo=nodedotjs)](#环境要求)
 [![deps](https://img.shields.io/badge/dependencies-0-brightgreen)](#两块东西)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![gateway tests](https://img.shields.io/badge/gateway%20tests-57%20passed-brightgreen)](workbuddy_api/scripts/verify.mjs)
+[![gateway tests](https://img.shields.io/badge/gateway%20tests-313%20passed-brightgreen)](workbuddy_api/scripts)
 [![protocols](https://img.shields.io/badge/protocols-3-blueviolet)](#四个客户端怎么接)
 
 **把 WorkBuddy 桌面 App 里的账号，变成你自己的本地 AI 网关。**
@@ -140,30 +140,58 @@ node src/bin.js accounts import D:\acc.json
 
 ```
 buddy-deck/
-├── WorkBuddyPanel/          Windows 桌面端（C# / WPF）
-│   ├── Services/            网关子进程、客户端配置读写、计划任务、账号迁移
-│   ├── ViewModels/          全部状态与命令
-│   ├── PasswordInputDialog.xaml  口令弹窗（导出/导入用）
-│   └── build.ps1            打成免安装包
-├── workbuddy_api/           网关（Node.js）
-│   ├── src/anthropic.js     Anthropic Messages ←→ Chat
-│   ├── src/responses.js     OpenAI Responses  ←→ Chat
-│   ├── src/accounts.js      多账号保险库
-│   ├── src/checkin.js       每日签到
-│   ├── src/transfer.js      跨机搬运（加密）
-│   └── scripts/verify.mjs   39 项自带回归
-└── 调用示例.py              调网关的最小 Python 示例
+├── WorkBuddyPanel/          Windows 桌面端（C# / WPF）—— 打包入口
+│   ├── Services/              网关子进程、客户端配置、计划任务、账号迁移
+│   ├── ViewModels/            全部状态与命令
+│   ├── Assets/                图标（鲸鱼娘，由 tools/make-icon 生成）
+│   ├── build.ps1              打成免安装包
+│   └── make-installer.ps1     打 Inno Setup 安装包
+│
+├── workbuddy_api/           网关（Node.js）—— 打包用的源
+│   ├── src/gateway.js         HTTP 端点
+│   ├── src/upstream.js        上游协议（请求头、请求体改写）
+│   ├── src/anthropic.js       Anthropic Messages ←→ Chat
+│   ├── src/responses.js       OpenAI Responses  ←→ Chat
+│   ├── src/agent.js           工具调用循环（生图/生视频）
+│   ├── src/miora.js           生图/生视频客户端
+│   ├── src/accounts.js        多账号保险库
+│   ├── src/checkin.js         每日签到
+│   ├── src/transfer.js        跨机搬运（加密）
+│   └── scripts/               自带回归测试（约 300 项）
+│
+├── next/                    新版全 .NET 实现（开发中）
+│   ├── src/BuddyDeck.Core/    凭证、协议、账号池（无 UI 依赖）
+│   ├── src/BuddyDeck.Gateway/ ASP.NET Core 网关
+│   ├── src/BuddyDeck.App/     WPF-UI 界面
+│   └── tests/                 五套测试项目
+│
+├── docs/                    文档
+│   ├── 目录说明.md            每个目录是什么、哪些能删
+│   ├── HANDOVER.md           新版的设计决策与踩过的坑
+│   └── TEAM-BRIEF.md         给 DSH AgentTeams 的启动指令
+│
+├── archive/                 弃用的实现（留档，不入库）
+├── research/                第三方资料（别人的 clone，不入库）
+├── _newapi/                 new-api 运行时（含数据库，不入库）
+└── 调用示例.py               调网关的最小 Python 示例
 ```
 
-第三方项目不在本仓库：
-[corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect)。
+**新读者请先看 [`docs/目录说明.md`](docs/目录说明.md)** —— 它说清了
+三套代码的关系、哪些目录能删、哪些动了会断线。
 
 ### 什么不会被提交
 
-`.gitignore` 挡掉了：构建产物（`bin` / `obj` / `publish`）、
-**账号保险库与所有凭据文件**（`accounts*.json` / `auth*.json` / `*.info`）、
-本地设置、以及那个第三方目录。
-仓库里只有源码和文档，0.6 MB。
+`.gitignore` 挡掉了：
+
+```
+构建产物       bin / obj / publish / dist
+凭据文件       accounts*.json / auth*.json / *.info / *.lic
+本地设置       settings.json
+弃用与资料     archive/ / research/（别人的 clone）
+运行时数据     _newapi/ / next/.local/
+```
+
+仓库里只有源码和文档。
 
 ---
 

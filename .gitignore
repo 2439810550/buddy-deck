@@ -17,7 +17,6 @@ maintain.log
 *.bak
 
 # 临时/调试目录
-_t/
 
 # 编辑器
 .vs/
@@ -26,7 +25,6 @@ _t/
 *.swp
 
 # ── 第三方项目：它是别人仓库的克隆，README 里给链接 ──────
-dsh-workbuddy-connect/
 
 # 和 workbuddy_api/ 内容重复的压缩包
 workbuddy_api.zip
@@ -41,16 +39,13 @@ publish*
 !publish/README*
 
 # 临时测试目录
-_t/
 
 # 安装包产物
 dist/
 
 # BuddyDeckHub 不进这个仓库（含管理密钥等敏感文件）
-BuddyDeckHub/
 
 # new-api 试用目录（132MB 二进制 + 运行时数据，含真 key）
-_newapi/
 
 # 临时截图
 _panel.png
@@ -63,29 +58,39 @@ _bd.png
 
 # 临时截图
 _ui.png
-_pub.png
 
 # 反代调研（临时克隆，不入库）
-_trae/
-_agent2/
-_traetest/
 _ui*.png
 
 # 测试方法论调研（临时克隆）
-_qa/
 
 # 测试项目的构建产物
 WorkBuddyPanel/tests/**/obj/
 WorkBuddyPanel/tests/**/bin/
 
 # DeepSeek Harness 官方仓库（调研用，临时克隆）
-_dsh/
 
-# ── 目录分类（2026-10-21 整理）──────────────────────────────
+
+# ═══════════════════════════════════════════════════════════
+# 目录约定
+# ═══════════════════════════════════════════════════════════
 #
-# _archive/   弃用的实现（自建 Hub 等）—— 留档但不再维护
-# _research/  调研资料（GitHub 抄来的参考项目、设计技能）—— 大约 300 MB
+# 入库（代码）
+#   workbuddy_api/     旧版网关（Node）—— 打包用
+#   WorkBuddyPanel/    旧版面板（WPF）—— 打包用
+#   next/              新版（全 .NET）
 #
-# 两者都不入库：库里的应该是我们自己写的代码，不是别人的 clone。
-_archive/
-_research/
+# 不入库
+#   archive/           弃用的实现（留档，不维护）
+#   research/          第三方资料（别人的 clone，约 300MB）
+#   _newapi/           new-api 运行时（含数据库）
+
+archive/
+research/
+_newapi/
+
+# 运行时数据与 IDE 缓存
+next/.vs/
+next/.local/
+**/probe-wait-*.txt
+.cache/
