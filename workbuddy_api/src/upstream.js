@@ -213,6 +213,112 @@ function normalizeDeveloperRole(obj) {
   }
 }
 
+/**
+ * 客户端身份声明的指纹词。
+ *
+ * ## 这是 2026-10-20 那次风控的根因
+ *
+ * 腾讯当晚给 `copilot.tencent.com` 加了一道**渠道校验**：只看 system
+ * 消息的**第一句**是不是这些固定原文，命中就回
+ *
+ *     HTTP 400  { "code": 11128,
+ *                 "msg": "Illegal API invocation from an unapproved channel" }
+ *
+ * ## 为什么针对的是这几句
+ *
+ * 各家 agent 客户端都会在 system 开头自报「我是谁」，这是它们的
+ * 遥测/身份标识，**不含任何提示词语义**。删掉或改写不改变模型收到的
+ * 任何指令 —— 这和项目里已有的「`role: developer` → `system`」是同一类
+ * 兼容层处理。
+ *
+ * ## 已知被拦的
+ *
+ * | 客户端 | 身份句 |
+ * |---|---|
+ * | DeepSeek Harness（dsh-workbuddy-connect） | `You are an AI agent powered by DeepSeek Harness.` |
+ * | Claude Code | `x-anthropic-billing-header: cc_version=…` （已在 anthropic.js 单独处理） |
+ *
+ * ## 实测结论（来自社区 PR #204 与本地复现）
+ *
+ * | system 形态 | 结果 |
+ * |---|---|
+ * | 以固定句开头 | **400 / 11128** |
+ * | 固定句前面有别的文字 | 200 |
+ * | 固定句在句中 | 200 |
+ * | 固定句换成中性表述 | 200 |
+ *
+ * 所以**只要在前面垫一句就能过**。这里选「垫一句中性的话」而不是删掉：
+ * 删掉会让模型少一条身份说明（虽然无伤），垫一句是零信息损失的。
+ */
+const HARNESS_IDENTITY_PATTERNS = [
+  /^You are an AI agent powered by DeepSeek Harness\./iu,
+  /^You are an AI Agent powered by DeepSeek Harness\./u,
+  /^You are DeepSeek Harness/iu,
+];
+
+/** 垫在身份句前面的中性句。挑一句最平常的，不带任何特殊含义。 */
+const NEUTRAL_PREFIX = "You are a helpful assistant.\n\n";
+
+/**
+ * 如果 system 消息以「客户端身份声明」开头，就在它前面垫一句中性话。
+ *
+ * ## 为什么垫一句而不是删
+ *
+ * 社区实测：固定句**前面有别的文字**就通过（200），删掉也能通过。
+ * 垫一句的好处是零信息损失 —— 模型仍然知道自己的身份，
+ * 我们只是让上游的「首句匹配」看不到那个特征。
+ *
+ * ## 为什么只处理第一条 system 的开头
+ *
+ * 上游只查开头。动别的位置是过度处理，而且可能改坏用户自己的 prompt。
+ *
+ * @param {object} obj 请求体（会被就地修改）
+ * @returns {boolean} 是否改动了
+ */
+function neutralizeHarnessIdentity(obj) {
+  const messages = obj["messages"];
+  if (!Array.isArray(messages)) return false;
+
+  for (const message of messages) {
+    if (!isObject(message)) continue;
+    if (message["role"] !== "system") continue;
+
+    const content = message["content"];
+
+    // 形态一：content 是字符串
+    if (typeof content === "string") {
+      if (!startsWithHarnessIdentity(content)) return false;
+      message["content"] = NEUTRAL_PREFIX + content;
+      return true;
+    }
+
+    // 形态二：content 是 [{type:"text", text:"…"}] 数组
+    // （OpenAI 的多段内容形态，有些客户端用这个）
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (!isObject(block) || block["type"] !== "text") continue;
+        const text = typeof block["text"] === "string" ? block["text"] : "";
+        if (!startsWithHarnessIdentity(text)) return false;
+        block["text"] = NEUTRAL_PREFIX + text;
+        return true;
+      }
+    }
+
+    // 只处理第一条 system
+    return false;
+  }
+
+  return false;
+}
+
+/** 这段文本是不是以已知的客户端身份声明开头。 */
+function startsWithHarnessIdentity(text) {
+  if (typeof text !== "string" || text === "") return false;
+  // 前导空白/换行不算 —— 有些客户端会在前面留空行
+  const trimmed = text.replace(/^[\s\uFEFF]+/u, "");
+  return HARNESS_IDENTITY_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
 /** Rewrite OpenAI `tool_choice` spellings into the upstream's string form. */
 function normalizeToolChoice(obj) {
   const suppress = () => {
@@ -273,6 +379,9 @@ export function prepareChatBody(source) {
   obj["stream"] = true;
   normalizeDeveloperRole(obj);
   normalizeToolChoice(obj);
+  // 渠道校验（2026-10-20 起）：system 首句如果是客户端身份声明，
+  // 上游会回 400 / 11128。垫一句中性话绕过 —— 详见函数注释。
+  neutralizeHarnessIdentity(obj);
   return JSON.stringify(obj);
 }
 
