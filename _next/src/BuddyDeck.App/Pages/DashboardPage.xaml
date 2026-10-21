@@ -1,0 +1,458 @@
+<UserControl
+    x:Class="BuddyDeck.App.Pages.DashboardPage"
+    x:Name="PageRoot"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:bd="clr-namespace:BuddyDeck.App.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    d:DesignHeight="700"
+    d:DesignWidth="960"
+    mc:Ignorable="d">
+
+    <!--
+        总览页的读法（design 计划 1.7 节）：
+          ① 顶栏已经在说「网关在不在」—— 这里不重复，只补它没说的（指纹、启动时间）
+          ② 账号摘要一行（不是英雄区，不进统计格）
+          ③ 最近请求的指标 + 列表
+
+        没有卡片、没有阴影、没有大数字英雄区。层级靠 Ink→Surface→Rail
+        三级明度和 1px 分隔线，不靠圆角大小。
+    -->
+    <Grid>
+
+            <!--
+        状态轨列已整列移除：竖条（bd:StatusRail）删除后这列只剩
+        「可用 N / M」两个数字，而左侧导航底部已有同样的统计 —— 信息重复。
+        内容区现在占满整行（原来 ScrollViewer 的 Grid.Column="1" 改为 Row="0"）。
+    -->
+    <Grid.RowDefinitions>
+        <RowDefinition Height="*" />
+    </Grid.RowDefinitions>
+
+
+        <!-- ======== 内容 ======== -->
+        <ScrollViewer
+            Grid.Row="0"
+            Padding="{StaticResource SpacePage}"
+            VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+
+                <!-- 页头 -->
+                <Grid Margin="0,0,0,24">
+                    <TextBlock
+                        Style="{DynamicResource TextPageTitle}"
+                        Foreground="{DynamicResource TextPrimaryBrush}"
+                        Text="总览" />
+                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                        <TextBlock
+                            Margin="0,0,14,0"
+                            VerticalAlignment="Center"
+                            Style="{DynamicResource TextSmall}"
+                            Foreground="{DynamicResource TextTertiaryBrush}"
+                            Text="{Binding LastRefreshedAt, StringFormat=刷新于 {0}}" />
+                        <ui:Button
+                            Appearance="Secondary"
+                            Command="{Binding RefreshCommand}"
+                            Content="刷新"
+                            Icon="{ui:SymbolIcon Symbol=ArrowSync24}" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- ① 网关：只留能拿来用的 —— 完整地址 + API key（都可复制） -->
+                <TextBlock
+                    Style="{DynamicResource TextSectionTitle}"
+                    Foreground="{DynamicResource TextPrimaryBrush}"
+                    Text="网关" />
+
+                <Border
+                    Margin="0,10,0,0"
+                    Padding="{StaticResource SpaceControl}"
+                    Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource HairlineBrush}"
+                    BorderThickness="{StaticResource BorderHairline}"
+                    CornerRadius="{StaticResource RadiusPanel}">
+                    <StackPanel>
+                        <!-- 离线：一句原因 + 去设置 -->
+                        <StackPanel Visibility="{Binding Online, Converter={StaticResource InverseBoolToVisibility}}">
+                            <TextBlock
+                                Style="{DynamicResource TextBody}"
+                                Foreground="{DynamicResource TextPrimaryBrush}"
+                                Text="连不上网关" />
+                            <TextBlock
+                                Margin="0,5,0,0"
+                                Style="{DynamicResource TextSmall}"
+                                Foreground="{DynamicResource TextSecondaryBrush}"
+                                Text="{Binding OfflineReason}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <!-- 在线：完整地址 + API key，各带复制按钮 -->
+                        <StackPanel Visibility="{Binding Online, Converter={StaticResource BoolToVisibility}}">
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock
+                                    Grid.Column="0"
+                                    VerticalAlignment="Center"
+                                    Style="{DynamicResource TextSmall}"
+                                    Foreground="{DynamicResource TextTertiaryBrush}"
+                                    Text="地址" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Margin="12,0,8,0"
+                                    VerticalAlignment="Center"
+                                    Style="{DynamicResource TextNumber}"
+                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                    Text="{Binding Endpoint}"
+                                    TextTrimming="CharacterEllipsis" />
+                                <ui:Button
+                                    Grid.Column="2"
+                                    Appearance="Transparent"
+                                    Click="OnCopyEndpoint"
+                                    Content="复制"
+                                    Icon="{ui:SymbolIcon Symbol=Copy24}"
+                                    ToolTip="复制网关地址到剪贴板" />
+                            </Grid>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock
+                                    Grid.Column="0"
+                                    VerticalAlignment="Center"
+                                    Style="{DynamicResource TextSmall}"
+                                    Foreground="{DynamicResource TextTertiaryBrush}"
+                                    Text="API key" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Margin="12,0,8,0"
+                                    VerticalAlignment="Center"
+                                    Style="{DynamicResource TextNumber}"
+                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                    Text="{Binding GatewayApiKey}"
+                                    TextTrimming="CharacterEllipsis" />
+                                <ui:Button
+                                    Grid.Column="2"
+                                    Appearance="Transparent"
+                                    Click="OnCopyApiKey"
+                                    Content="复制"
+                                    Icon="{ui:SymbolIcon Symbol=Copy24}"
+                                    ToolTip="复制 API key 到剪贴板" />
+                            </Grid>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- ② 账号摘要：一行，不是英雄区 -->
+                <TextBlock
+                    Margin="0,24,0,0"
+                    Style="{DynamicResource TextSectionTitle}"
+                    Foreground="{DynamicResource TextPrimaryBrush}"
+                    Text="账号" />
+
+                <Border
+                    Margin="0,10,0,0"
+                    Padding="{StaticResource SpaceControl}"
+                    Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource HairlineBrush}"
+                    BorderThickness="{StaticResource BorderHairline}"
+                    CornerRadius="{StaticResource RadiusPanel}">
+                    <Grid>
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock
+                                    Style="{DynamicResource TextNumberStrong}"
+                                    Foreground="{DynamicResource TextPrimaryBrush}"
+                                    Text="{Binding HealthyCount}" />
+                                <TextBlock
+                                    Margin="5,0,0,0"
+                                    VerticalAlignment="Bottom"
+                                    Style="{DynamicResource TextNumber}"
+                                    Foreground="{DynamicResource TextTertiaryBrush}"
+                                    Text="{Binding AccountCount, StringFormat=共 {0} 个}" />
+                            </StackPanel>
+                            <TextBlock
+                                Margin="0,7,0,0"
+                                Style="{DynamicResource TextBody}"
+                                Foreground="{DynamicResource TextSecondaryBrush}"
+                                Text="{Binding AccountsHeadline}"
+                                TextWrapping="Wrap" />
+
+                            <!-- ★ 池子总积分（20 个号汇总，读数据库，秒读）-->
+                            <Border
+                                Margin="0,10,0,0"
+                                Padding="10,8"
+                                Background="{DynamicResource RailSubtleBrush}"
+                                CornerRadius="{StaticResource RadiusRow}"
+                                Visibility="{Binding HasPoolCredit, Converter={StaticResource BoolToVisibility}}">
+                                <StackPanel>
+                                    <TextBlock
+                                        Style="{DynamicResource TextMicro}"
+                                        Foreground="{DynamicResource TextTertiaryBrush}"
+                                        Text="{Binding PoolCreditDetail, StringFormat=池子总积分 · {0}}" />
+                                    <TextBlock
+                                        Margin="0,3,0,0"
+                                        Style="{DynamicResource TextNumber}"
+                                        Foreground="{DynamicResource TextPrimaryBrush}"
+                                        Text="{Binding PoolCreditTotal}" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <ui:Button
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Top"
+                            Margin="0,4,0,0"
+                            Appearance="Secondary"
+                            Click="OnGoToAccounts"
+                            Content="管理账号" />
+                    </Grid>
+                </Border>
+
+                <!-- ③ 最近请求：指标是这块的一行头部字段，不是四个独立格子 -->
+                <TextBlock
+                    Margin="0,24,0,0"
+                    Style="{DynamicResource TextSectionTitle}"
+                    Foreground="{DynamicResource TextPrimaryBrush}"
+                    Text="最近请求" />
+
+                <Border
+                    Margin="0,10,0,0"
+                    Padding="{StaticResource SpaceControl}"
+                    Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource HairlineBrush}"
+                    BorderThickness="{StaticResource BorderHairline}"
+                    CornerRadius="{StaticResource RadiusPanel}">
+                    <StackPanel>
+                        <!-- 指标行：等宽数字 + 微标签，上下排。不占英雄位 -->
+                        <ItemsControl ItemsSource="{Binding Metrics}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,0,32,0">
+                                        <TextBlock
+                                            Style="{DynamicResource TextMicro}"
+                                            Foreground="{DynamicResource TextTertiaryBrush}"
+                                            Text="{Binding Label}" />
+                                        <TextBlock
+                                            Margin="0,4,0,0"
+                                            Style="{DynamicResource TextNumberStrong}"
+                                            Foreground="{DynamicResource TextPrimaryBrush}"
+                                            Text="{Binding Value}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!--
+                            换号体检：请求 N 次 / 上游尝试 M 次。
+                            一条行，不是卡片 —— 层级靠 1px 分隔线，不用圆角和阴影。
+
+                            为什么这个数字值得单独占一行：**它是唯一能看出「池子在恶化」的信号**。
+                            重试成功会让成功率保持 100%（系统帮你救回来了），
+                            但「100 次请求打了 137 次上游」说明有号在反复被限流 ——
+                            只看成功率，池子烂到某个程度之前完全看不出来。
+                        -->
+                        <Border
+                            Margin="0,14,0,0"
+                            Padding="0,12,0,0"
+                            BorderBrush="{DynamicResource HairlineBrush}"
+                            BorderThickness="0,1,0,0"
+                            Visibility="{Binding HasAttemptData, Converter={StaticResource BoolToVisibility}}">
+                            <Grid>
+                                <StackPanel HorizontalAlignment="Left">
+                                    <TextBlock
+                                        Style="{DynamicResource TextMicro}"
+                                        Foreground="{DynamicResource TextTertiaryBrush}"
+                                        Text="换号重试" />
+                                    <TextBlock
+                                        Margin="0,4,0,0"
+                                        Text="{Binding AttemptRatio}">
+                                        <TextBlock.Style>
+                                            <!--
+                                                有重试时用琥珀（提示，不是报警），没有时用常规色。
+                                                刻意**不用红色** —— 换号重试是系统在正常工作，
+                                                一个号被限流、池子换一个顶上，用户照样拿到了答案。
+                                                标成红色会让用户以为坏了。
+                                            -->
+                                            <Style BasedOn="{StaticResource TextNumberStrong}" TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasRetryOverhead}" Value="True">
+                                                        <Setter Property="Foreground" Value="{DynamicResource WarnBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+
+                                <TextBlock
+                                    MaxWidth="420"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    TextAlignment="Right"
+                                    TextWrapping="Wrap"
+                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                    Text="{Binding AttemptNote}">
+                                    <TextBlock.Style>
+                                        <Style BasedOn="{StaticResource TextSmall}" TargetType="TextBlock" />
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+
+                        <!-- 空态：邀请动作，不说「暂无数据」 -->
+                        <StackPanel
+                            Margin="0,14,0,0"
+                            Visibility="{Binding MetricsAvailable, Converter={StaticResource InverseBoolToVisibility}}">
+                            <TextBlock
+                                Style="{DynamicResource TextBody}"
+                                Foreground="{DynamicResource TextPrimaryBrush}"
+                                Text="还没有请求记录" />
+                            <TextBlock
+                                Margin="0,5,0,0"
+                                Style="{DynamicResource TextSmall}"
+                                Foreground="{DynamicResource TextSecondaryBrush}"
+                                Text="发一次聊天测试就能看到。"
+                                TextWrapping="Wrap" />
+                            <ui:Button
+                                Margin="0,12,0,0"
+                                HorizontalAlignment="Left"
+                                Appearance="Secondary"
+                                Click="OnGoToChat"
+                                Content="去聊天测试" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- 请求列表：行 + 左侧状态条 + 1px 分隔线，没有卡片 -->
+                <Border
+                    Margin="0,12,0,0"
+                    Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource HairlineBrush}"
+                    BorderThickness="{StaticResource BorderHairline}"
+                    CornerRadius="{StaticResource RadiusPanel}">
+                    <StackPanel>
+                        <Border
+                            Padding="14,9,14,9"
+                            Background="{DynamicResource RailSubtleBrush}"
+                            BorderBrush="{DynamicResource HairlineBrush}"
+                            BorderThickness="0,0,0,1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="72" />
+                                    <ColumnDefinition Width="2*" />
+                                    <ColumnDefinition Width="1.1*" />
+                                    <ColumnDefinition Width="84" />
+                                    <ColumnDefinition Width="1.2*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock
+                                    Grid.Column="0"
+                                    Style="{DynamicResource TextMicro}"
+                                    Foreground="{DynamicResource TextTertiaryBrush}"
+                                    Text="时间" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Style="{DynamicResource TextMicro}"
+                                    Foreground="{DynamicResource TextTertiaryBrush}"
+                                    Text="模型" />
+                                <TextBlock
+                                    Grid.Column="2"
+                                    Style="{DynamicResource TextMicro}"
+                                    Foreground="{DynamicResource TextTertiaryBrush}"
+                                    Text="结果" />
+                                <TextBlock
+                                    Grid.Column="3"
+                                    Style="{DynamicResource TextMicro}"
+                                    Foreground="{DynamicResource TextTertiaryBrush}"
+                                    Text="耗时" />
+                                <TextBlock
+                                    Grid.Column="4"
+                                    Style="{DynamicResource TextMicro}"
+                                    Foreground="{DynamicResource TextTertiaryBrush}"
+                                    Text="账号" />
+                            </Grid>
+                        </Border>
+
+                        <ItemsControl ItemsSource="{Binding RecentRequests}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border
+                                        Padding="14,9,14,9"
+                                        BorderBrush="{DynamicResource HairlineBrush}"
+                                        BorderThickness="0,0,0,1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="72" />
+                                                <ColumnDefinition Width="2*" />
+                                                <ColumnDefinition Width="1.1*" />
+                                                <ColumnDefinition Width="84" />
+                                                <ColumnDefinition Width="1.2*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock
+                                                Grid.Column="0"
+                                                Style="{DynamicResource TextNumber}"
+                                                Foreground="{DynamicResource TextTertiaryBrush}"
+                                                Text="{Binding Time}" />
+                                            <TextBlock
+                                                Grid.Column="1"
+                                                Style="{DynamicResource TextBody}"
+                                                Foreground="{DynamicResource TextPrimaryBrush}"
+                                                Text="{Binding Model}"
+                                                TextTrimming="CharacterEllipsis" />
+                                            <TextBlock
+                                                Grid.Column="2"
+                                                Style="{DynamicResource TextBody}"
+                                                Foreground="{DynamicResource TextSecondaryBrush}"
+                                                Text="{Binding Outcome}" />
+                                            <TextBlock
+                                                Grid.Column="3"
+                                                Style="{DynamicResource TextNumber}"
+                                                Foreground="{DynamicResource TextSecondaryBrush}"
+                                                Text="{Binding Duration}" />
+                                            <TextBlock
+                                                Grid.Column="4"
+                                                Style="{DynamicResource TextSmall}"
+                                                Foreground="{DynamicResource TextTertiaryBrush}"
+                                                Text="{Binding AccountTag}"
+                                                TextTrimming="CharacterEllipsis" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock
+                            Margin="14,14,14,16"
+                            Text="还没有请求记录。到「聊天测试」发一句话就会出现。">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock"><Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" /><Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding RecentRequests.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

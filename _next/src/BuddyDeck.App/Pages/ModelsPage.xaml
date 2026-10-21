@@ -1,0 +1,279 @@
+<UserControl
+    x:Class="BuddyDeck.App.Pages.ModelsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:bd="clr-namespace:BuddyDeck.App.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    d:DesignHeight="700"
+    d:DesignWidth="1100"
+    mc:Ignorable="d">
+
+    <!--
+        模型页。
+
+        对标 workbuddy-manager 的 models 页：列出目录里全部模型，
+        带倍率与推理档位，可筛选可排序。
+
+        ⚠ 数据面现状：网关的 /v1/models 只回 ID 与名称。
+          倍率与档位拿不到时显示「—」并说明原因 —— **不编造数据**。
+          这一页宁可看起来"缺两列"，也不给一列看起来合理的假倍率。
+    -->
+    <Grid Margin="{StaticResource SpacePage}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 页头 -->
+        <Grid Grid.Row="0" Margin="0,0,0,20">
+            <StackPanel>
+                <TextBlock
+                    Style="{DynamicResource TextPageTitle}"
+                    Foreground="{DynamicResource TextPrimaryBrush}"
+                    Text="模型" />
+                <TextBlock
+                    Margin="0,5,0,0"
+                    Style="{DynamicResource TextSmall}"
+                    Foreground="{DynamicResource TextSecondaryBrush}"
+                    Text="网关目录里的模型：倍率、能不能推理、支持哪些档位" />
+            </StackPanel>
+            <ui:Button
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Appearance="Secondary"
+                Command="{Binding RefreshCommand}"
+                Content="读取模型列表"
+                Icon="{ui:SymbolIcon Symbol=ArrowSync24}" />
+        </Grid>
+
+        <!--
+            数据面说明。只在倍率拿不到时出现 —— 不是常驻横幅，
+            因为它说明的是"这一列为什么是空的"，空列没了它也就没必要了。
+        -->
+        <Border
+            Grid.Row="1"
+            Margin="0,0,0,14"
+            Padding="12,10,12,10"
+            Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource HairlineBrush}"
+            BorderThickness="{StaticResource BorderHairline}"
+            CornerRadius="{StaticResource RadiusPanel}"
+            Visibility="{Binding BillingNotice, Converter={StaticResource StringToVisibility}}">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock
+                    VerticalAlignment="Center"
+                    Style="{DynamicResource TextSmall}"
+                    Foreground="{DynamicResource TextSecondaryBrush}"
+                    Text="{Binding BillingNotice}" />
+            </StackPanel>
+        </Border>
+
+        <!-- 筛选 + 排序 -->
+        <Border
+            Grid.Row="2"
+            Margin="0,0,0,14"
+            Padding="12,10,12,10"
+            Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource HairlineBrush}"
+            BorderThickness="{StaticResource BorderHairline}"
+            CornerRadius="{StaticResource RadiusPanel}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="260" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="190" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock
+                    Grid.Column="0"
+                    Margin="0,0,8,0"
+                    VerticalAlignment="Center"
+                    Style="{DynamicResource TextSmall}"
+                    Foreground="{DynamicResource TextSecondaryBrush}"
+                    Text="找" />
+
+                <TextBox
+                    Grid.Column="1"
+                    Style="{DynamicResource FieldInput}"
+                    Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" />
+
+                <TextBlock
+                    Grid.Column="2"
+                    Margin="16,0,8,0"
+                    VerticalAlignment="Center"
+                    Style="{DynamicResource TextSmall}"
+                    Foreground="{DynamicResource TextSecondaryBrush}"
+                    Text="排序" />
+
+                <ComboBox
+                    Grid.Column="3"
+                    DisplayMemberPath="Name"
+                    ItemsSource="{Binding Sorts}"
+                    SelectedItem="{Binding Sort}" />
+
+                <!-- 计数右对齐：数字站住不动（等宽） -->
+                <StackPanel
+                    Grid.Column="5"
+                    VerticalAlignment="Center"
+                    Orientation="Horizontal">
+                    <TextBlock
+                        Style="{DynamicResource TextNumber}"
+                        Text="{Binding ShownCount}" />
+                    <TextBlock
+                        Margin="4,0,0,0"
+                        Style="{DynamicResource TextSmall}"
+                        Foreground="{DynamicResource TextSecondaryBrush}"
+                        Text="个" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- 表头 + 列表 -->
+        <Border
+            Grid.Row="3"
+            Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource HairlineBrush}"
+            BorderThickness="{StaticResource BorderHairline}"
+            CornerRadius="{StaticResource RadiusPanel}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- 表头 -->
+                <Border
+                    Grid.Row="0"
+                    Padding="12,8,12,8"
+                    Background="{DynamicResource RailSubtleBrush}"
+                    BorderBrush="{DynamicResource HairlineBrush}"
+                    BorderThickness="0,0,0,1"
+                    CornerRadius="6,6,0,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="2*" />
+                            <ColumnDefinition Width="1.2*" />
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="1.6*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock
+                            Grid.Column="0"
+                            Style="{DynamicResource TextMicro}"
+                            Text="名称" />
+                        <TextBlock
+                            Grid.Column="1"
+                            Style="{DynamicResource TextMicro}"
+                            Text="ID" />
+                        <TextBlock
+                            Grid.Column="2"
+                            Style="{DynamicResource TextMicro}"
+                            Text="倍率" />
+                        <TextBlock
+                            Grid.Column="3"
+                            Style="{DynamicResource TextMicro}"
+                            Text="推理" />
+                        <TextBlock
+                            Grid.Column="4"
+                            Style="{DynamicResource TextMicro}"
+                            Text="档位" />
+                    </Grid>
+                </Border>
+
+                <!--
+                    列表。用虚拟化容器 —— 目录可能有几十上百个模型，
+                    一屏排不完。WPF-UI 自带 VirtualizingItemsControl。
+                -->
+                <ui:VirtualizingItemsControl
+                    Grid.Row="1"
+                    ItemsSource="{Binding Models}">
+                    <ui:VirtualizingItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border
+                                Padding="12,10,12,10"
+                                BorderBrush="{DynamicResource HairlineBrush}"
+                                BorderThickness="0,0,0,1">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2*" />
+                                        <ColumnDefinition Width="1.2*" />
+                                        <ColumnDefinition Width="90" />
+                                        <ColumnDefinition Width="90" />
+                                        <ColumnDefinition Width="1.6*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock
+                                        Grid.Column="0"
+                                        VerticalAlignment="Center"
+                                        Style="{DynamicResource TextBody}"
+                                        Text="{Binding DisplayName}"
+                                        TextTrimming="CharacterEllipsis" />
+
+                                    <TextBlock
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        Style="{DynamicResource TextNumber}"
+                                        Foreground="{DynamicResource TextSecondaryBrush}"
+                                        Text="{Binding Id}"
+                                        TextTrimming="CharacterEllipsis" />
+
+                                    <!-- 倍率：拿不到时是「—」（TextNumber 等宽，数字不跳宽） -->
+                                    <TextBlock
+                                        Grid.Column="2"
+                                        VerticalAlignment="Center"
+                                        Style="{DynamicResource TextNumber}"
+                                        Text="{Binding MultiplierText}" />
+
+                                    <TextBlock
+                                        Grid.Column="3"
+                                        VerticalAlignment="Center"
+                                        Style="{DynamicResource TextSmall}"
+                                        Foreground="{DynamicResource TextSecondaryBrush}"
+                                        Text="{Binding ReasoningText}" />
+
+                                    <TextBlock
+                                        Grid.Column="4"
+                                        VerticalAlignment="Center"
+                                        Style="{DynamicResource TextSmall}"
+                                        Foreground="{DynamicResource TextSecondaryBrush}"
+                                        Text="{Binding EffortsText}"
+                                        TextTrimming="CharacterEllipsis" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ui:VirtualizingItemsControl.ItemTemplate>
+                </ui:VirtualizingItemsControl>
+
+                <!-- 空态 / 提示 -->
+                <StackPanel
+                    Grid.Row="1"
+                    Margin="24"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Visibility="{Binding Models, Converter={StaticResource EmptyCollectionToVisibility}}">
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        Style="{DynamicResource TextSectionTitle}"
+                        Foreground="{DynamicResource TextPrimaryBrush}"
+                        Text="这里没有模型" />
+                    <TextBlock
+                        MaxWidth="420"
+                        Margin="0,8,0,0"
+                        HorizontalAlignment="Center"
+                        Style="{DynamicResource TextSmall}"
+                        Foreground="{DynamicResource TextSecondaryBrush}"
+                        Text="{Binding EmptyNotice}"
+                        TextAlignment="Center"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

@@ -1,0 +1,126 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    BuddyDeck.App —— WPF 桌面界面。
+
+    为什么这个文件从根目录继承 TargetFramework=net8.0：
+      根 Directory.Build.props 里写的是 net8.0，WPF 需要 `net8.0-windows`
+      这个带平台后缀的 TFM（否则 System.Windows 程序集引用不上）。
+      这里单点覆盖，不动根文件。
+
+    为什么这里关掉分析器 / TreatWarningsAsErrors：
+      根 Directory.Build.props 设了 TreatWarningsAsErrors=true + EnableNETAnalyzers=true。
+      XAML 编译会生成 .g.cs（BAML 加载、x:Name 字段、事件挂钩），那些生成代码
+      会在我们自己控制不到的地方踩 CA 规则 —— 最典型的是：
+        · CA1812  内部类未实例化（XAML 里的 Page/Window 是反射实例化的）
+        · CA2000  IDisposable 未释放（生成的分部类里有个别字段）
+        · CA1051  可见的实例字段（x:Name 字段是 internal field）
+      关在根文件里等于把整个解决方案的规则一起关掉（Gateway / Core 都要这些规则），
+      所以只在本项目关。下面 NO_ANALYZERS 只影响本项目编译。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+
+    <!--
+      ⚠ t80 新增：托盘图标需要 WinForms 的 NotifyIcon。
+
+      三个候选方案与取舍：
+        A. UseWindowsForms=true + WinForms.NotifyIcon     ← 选它
+        B. 手写 Shell_NotifyIcon P/Invoke（零依赖）
+        C. 第三方包 H.NotifyIcon.Wpf
+
+      **选 A 的理由**：
+        · 旧版 WorkBuddyPanel 在**同一技术栈**（net8.0-windows + UseWPF）上
+          已经用了这条路并被真机验证过 —— 见其 csproj 的 UseWindowsForms=true
+        · 一行配置 vs 方案 B 要自己处理窗口消息循环、右键菜单弹出、
+          图标生命周期（工作量翻倍且容易出 bug）
+        · 我们本来就只有 Windows 目标，没有跨平台顾虑
+
+      **代价**（要知道）：引用 WinForms 会让程序集多带一层
+      System.Windows.Forms 依赖，发布体积略增。对一个桌面工具可接受。
+
+      ⚠ WPF + WinForms 混用有一个已知的坑：两者的 Application 类型不兼容，
+      所以托盘相关的代码**必须**用别名 `WinForms = System.Windows.Forms`
+      （见 TrayIcon.cs），不能直接 using。
+    -->
+    <UseWindowsForms>true</UseWindowsForms>
+
+    <RootNamespace>BuddyDeck.App</RootNamespace>
+    <AssemblyName>BuddyDeck.App</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- 见上方说明：只关本项目，不动根 Directory.Build.props -->
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <!--
+    ⚠ t80 收尾：把 WinForms / Drawing 的隐式 using 摘掉。
+
+    同时开 `UseWPF` + `UseWindowsForms` 会让 SDK **自动把 `System.Windows.Forms`
+    与 `System.Drawing` 加进隐式 using 集**，于是整个 App 里这些类型全部二义：
+
+        CS0104 "Application" 是 System.Windows.Forms.Application
+                             和 System.Windows.Application 之间不明确
+        CS0104 "Brush"       是 System.Drawing.Brush
+                             和 System.Windows.Media.Brush 之间不明确
+
+    **实测：48 条 CS0104，分布在 7 个与托盘毫无关系的文件上**
+    （App.xaml.cs / EmptyState.cs / QuotaBar.cs / StatusRail.cs /
+      ValueConverters.cs / AccountsPage.xaml.cs / DashboardPage.xaml.cs）
+
+    这是典型的「一处配置改动，全场红」—— 红在跟那个功能无关的文件上。
+
+    ⇒ **根因在 csproj，不该扩散到 7 个文件逐个加别名**：
+      那样以后每加一个用 `Brush` / `Application` 的新文件都会再撞一次。
+
+    摘掉隐式 using 后托盘代码照常工作 —— 它本来就用别名
+    `WinForms = System.Windows.Forms`（见 TrayIcon.cs），不依赖隐式 using。
+  -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 托盘图标（TrayIcon.cs 里按资源名取） -->
+    <Resource Include="Assets\tray.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+
+    <!--
+      ⚠ 导入旧版账号时要还原 GBK 乱码标签（AccountImport.RepairMojibake）。
+
+      .NET Core 起默认**不带** GBK 等代码页编码 —— `Encoding.GetEncoding("GBK")`
+      会抛 ArgumentException。必须引这个包并在启动时
+      `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)`（见 AccountImport.cs）。
+
+      **这个包不是可选项**：缺了它，RepairMojibake 的 catch 会吞掉异常、
+      静默返回原始乱码串 —— 症状是「导入成功但所有账号标签都是乱码」，
+      而排错时看不出哪里错了（因为一条异常都没有）。
+    -->
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+
+    <!--
+      GatewayReaper 用 WMI 读别的进程的命令行（System.Management）。
+      为什么不用 P/Invoke 读 PEB：脆弱、且 32/64 位要两套结构体。
+      WMI 是 .NET 支持的标准做法。
+    -->
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../BuddyDeck.Core/BuddyDeck.Core.csproj" />
+  </ItemGroup>
+
+</Project>

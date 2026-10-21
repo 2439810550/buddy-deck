@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    共享测试夹具的**自身测试**。
+
+    为什么夹具也要有测试：如果夹具本身是坏的，两边（gateway / e2e）会同时
+    用坏的夹具写出「绿的假测试」—— 那比没有夹具更糟。所以这里至少要证明：
+      · 假上游真的按脚本走，请求真的被判读
+      · 「429 → 换号 → 200」这条链路端到端跑得通
+      · 测试宿主真的起得来、/healthz 真的能等到
+
+    它引用兄弟项目 ../BuddyDeck.TestSupport —— **不复制**夹具代码。
+  -->
+  <PropertyGroup>
+    <RootNamespace>BuddyDeck.TestSupport.Tests</RootNamespace>
+    <AssemblyName>BuddyDeck.TestSupport.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <TargetFramework>net8.0</TargetFramework>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../BuddyDeck.TestSupport/BuddyDeck.TestSupport.csproj" />
+  </ItemGroup>
+</Project>

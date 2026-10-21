@@ -2,8 +2,15 @@
   <Folder Name="/src/">
     <Project Path="src/BuddyDeck.Core/BuddyDeck.Core.csproj" />
     <Project Path="src/BuddyDeck.Gateway/BuddyDeck.Gateway.csproj" />
+    <Project Path="src/BuddyDeck.App/BuddyDeck.App.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/BuddyDeck.Core.Tests/BuddyDeck.Core.Tests.csproj" />
+    <Project Path="tests/BuddyDeck.Gateway.Tests/BuddyDeck.Gateway.Tests.csproj" />
+    <Project Path="tests/BuddyDeck.TestSupport/BuddyDeck.TestSupport.csproj" />
+    <Project Path="tests/BuddyDeck.TestSupport.Tests/BuddyDeck.TestSupport.Tests.csproj" />
+    <Project Path="tests/BuddyDeck.DocSamples.Tests/BuddyDeck.DocSamples.Tests.csproj" />
+    <Project Path="tests/BuddyDeck.E2E.Tests/BuddyDeck.E2E.Tests.csproj" />
+    <Project Path="tests/BuddyDeck.App.Presentation.Tests/BuddyDeck.App.Presentation.Tests.csproj" />
   </Folder>
 </Solution>

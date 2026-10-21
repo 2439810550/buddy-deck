@@ -139,6 +139,75 @@ public static class UpstreamHeaders
 }
 
 /// <summary>
+/// 「这次失败怪谁」—— **环境**还是**账号/上游**。
+///
+/// ## 为什么必须分开（t79 的真缺陷）
+///
+/// 本机系统代理没生效时，**所有**请求都是连接层失败（`status == 0`）。
+/// 如果这类失败也计入账号的连续失败数，会发生：
+///
+/// ```
+/// 8 个健康账号 → 每个被记 5 次连接失败 → 全部冷冻
+/// → 之后所有请求返回 429「没有可用账号」
+/// → 界面上看不出是环境问题，看起来像"账号全坏了"
+/// ```
+///
+/// **几十秒就能把一整池好账号冻掉，而且不可自愈**（冷冻要手动解）。
+///
+/// ## 判据：`status == 0` 是传输失败
+///
+/// `<see cref="UpstreamClient"/>` 沿用了旧版网关的约定：
+/// **连不上时 `Status = 0`**（见 `UpstreamResult.Status` 的注释）。
+/// 那个 0 不是 HTTP 状态码，是一个哨兵值 —— 用来区分
+/// 「连不上」和「连上了但被拒」，因为**这两件事对用户完全不同**。
+///
+/// ## 为什么放在这里而不是账号池里
+///
+/// 它是**关于上游协议的知识**（0 代表什么、哪些算传输层），
+/// 而账号池只该关心「该不该惩罚这个号」。
+/// 放在协议层，网关、账号池、探活都能引用同一个判据 —— 各写一份就会出现
+/// 「账号池认为 0 是环境问题、网关认为 0 是 server 错误」这种不一致。
+/// </summary>
+public static class TransportFailure
+{
+    /// <summary>
+    /// 这次失败是不是**连接层**的（DNS / 连接被拒 / TLS / 超时）。
+    ///
+    /// 判据就一条：`status == 0`。
+    /// **不要**用 `Kind == Server` 去判 —— 真实的 5xx（上游返回了响应体）
+    /// 也是 `Server`，而那一类**应该**惩罚账号（那个号可能真有问题）。
+    /// 这正是 t79 缺陷的成因：两者被归成了同一个 Kind。
+    /// </summary>
+    public static bool IsTransport(int status) => status == 0;
+
+    /// <summary>
+    /// 这次失败该不该记到账号头上（累计连续失败、可能冷冻）。
+    ///
+    /// ```
+    /// 传输失败（status == 0）  → false  环境问题，不惩罚账号
+    /// 上游 5xx（有响应体）      → true   可能是这个号/这条链路的问题
+    /// 限流                      → 由 MarkRateLimited 单独处理（它按模型冷却）
+    /// ```
+    ///
+    /// @param status 上游状态码。0 = 连接层失败。
+    /// @param kind   错误分类。**仅用于区分限流**，不用于判断传输层 ——
+    ///               因为限流和 5xx 的 `Kind` 是分得开的，而传输层与 5xx 的
+    ///               `Kind` **分不开**（都是 `Server`）。所以传输层只看 status。
+    /// </summary>
+    public static bool ShouldCountAgainstAccount(int status, string? kind)
+    {
+        // 限流不走这条路径（它有自己的 MarkRateLimited），但真走到这里
+        // 也不该当"账号坏了"记 —— 限流是**临时**的，不是账号质量问题。
+        if (kind is UpstreamErrorKind.RateLimited or UpstreamErrorKind.ModelRateLimited) return false;
+
+        // ★ 核心：连接层失败是环境问题
+        if (IsTransport(status)) return false;
+
+        return true;
+    }
+}
+
+/// <summary>
 /// 请求体改写管线。
 ///
 /// ## 为什么要在转发前改客户端的请求
@@ -171,10 +240,29 @@ public static class RequestPipeline
     /// <summary>
     /// 按变体准备请求体。
     ///
+    /// ## `model` 参数的三态契约（重要）
+    ///
+    /// | 传入 | 行为 |
+    /// |---|---|
+    /// | `null`（默认） | **完全不碰** body 里的 `model` 字段 —— 保持调用方原样 |
+    /// | 非空字符串 | 把 `body.model` 改写成该值 |
+    /// | 空字符串 `""` | 同 `null`（视为「没有指定」，不是「把模型删掉」） |
+    ///
+    /// **为什么 `null` 必须保持原样**：<see cref="Prepare"/> 是 Core 的公开 API，
+    /// 调用方不一定都想改模型 —— 有的只想做 stream / 角色 / tool_choice 归一。
+    /// 如果 `null` 被当成「清空模型」，那些调用方会静默地把模型删掉，
+    /// 而**编译期完全看不出来**（可选参数，不传就是 null）。
+    ///
+    /// **为什么要有这个参数**：网关会把客户端写死的别名（`gpt-4o`）落到
+    /// 自己能用的模型（`hy3`）。如果只落「选号」不落「请求体」，就会出现
+    /// 两个模型名 —— 上游收到它不认识的别名，而冷却记账却按 `hy3` 记，
+    /// 结果是「限了 A 模型却把 B 模型拉黑」（HANDOVER 坑 4 的配额浪费）。
+    /// 把改写并进管线，是因为这本来就是管线该做的事。
+    ///
     /// @returns 改写后的 JSON 文本。解析失败时**原样返回** —— 宁可让上游
     ///          报错，也不要把客户端的东西改坏。
     /// </summary>
-    public static string Prepare(UpstreamVariant variant, string source)
+    public static string Prepare(UpstreamVariant variant, string source, string? model = null)
     {
         JsonNode? node;
         try
@@ -187,6 +275,13 @@ public static class RequestPipeline
         }
 
         if (node is not JsonObject body) return source;
+
+        // ⚠ 只有**明确给了非空**模型时才改写。
+        // null / "" = 调用方不想管模型，body 里原来是什么就留什么。
+        if (!string.IsNullOrEmpty(model))
+        {
+            body["model"] = model;
+        }
 
         body["stream"] = true;
         NormalizeDeveloperRole(body);

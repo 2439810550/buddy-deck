@@ -1,0 +1,201 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    BuddyDeck.App.Presentation.Tests —— design 交付的纯逻辑测试。
+
+    ## 为什么不 ProjectReference BuddyDeck.App
+
+    两个理由：
+
+    1. BuddyDeck.App 是 WinExe + net8.0-windows。测试项目引用它会把 WPF
+       运行时拖进来，而且测试跑在 xunit 的 STA/MTA 上会和 WPF 的
+       Dispatcher 打架 —— 这些测试根本不需要 WPF。
+    2. **解耦**：用 Compile Include 直接把纯逻辑源文件链接进来，
+       测试就只依赖「这几个文件」，不依赖 BuddyDeck.App 能不能编译。
+       ui 的页面 XAML 炸了也不影响我这边验证逻辑。
+
+    ## 被链接的四个文件（都是无 WPF 依赖的纯逻辑）
+
+    · Converters/TimeText.cs         时间解析与格式化（HANDOVER 坑 2）
+    · Controls/QuotaMath.cs          配额状态推导与条宽计算
+    · Converters/StatusAppearance.cs 状态 → 资源 key 的映射
+    · Services/AccountPresentation.cs（ui 写的，我引用它的 StateLabel 等）
+      + 一个最小的 AccountState/AccountSummary 桩
+
+    StatusAppearance 依赖 AccountState，所以这里也链接 ui 的
+    AccountPresentation.cs —— 但它又依赖 AccountSummary（在 IGatewayClient.cs 里）。
+    为了不把整个网关客户端拖进来，下面用 DefineConstants 编译它需要的最小类型。
+  -->
+
+  <!--
+    ⚠ TargetFramework 必须是 net8.0-windows + UseWPF：ThemeResourceTests 要真的
+      把 XAML 字典加载一遍（用 XamlReader），那需要 WindowsBase / PresentationFramework。
+      其余三个测试文件是纯逻辑，跑在同一个程序集里不受影响。
+  -->
+  <PropertyGroup>
+    <RootNamespace>BuddyDeck.App.Presentation.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      被验证的纯逻辑：从 App 项目链接，不复制（避免两份漂移）。
+
+      ⚠ Controls.xaml 里有 <Style TargetType="bd:QuotaBar"> 这种样式，
+        它们的 TargetType 是个具体类型 —— 加载字典时必须能解析到该类型。
+        所以 Controls/*.cs 也必须编进测试程序集，否则字典加载会报
+        「类型引用无法找到名为 ...QuotaBar 的类型」。
+        这带来的好处是：控件的 C# 也一并被编译验证了。
+    -->
+    <Compile Include="../../src/BuddyDeck.App/Converters/TimeText.cs"
+             Link="Sut/TimeText.cs" />
+    <Compile Include="../../src/BuddyDeck.App/Converters/StatusAppearance.cs"
+             Link="Sut/StatusAppearance.cs" />
+    <Compile Include="../../src/BuddyDeck.App/Controls/QuotaMath.cs"
+             Link="Sut/QuotaMath.cs" />
+    <Compile Include="../../src/BuddyDeck.App/Controls/QuotaBar.cs"
+             Link="Sut/QuotaBar.cs" />
+    <Compile Include="../../src/BuddyDeck.App/Controls/AccountStateBadge.cs"
+             Link="Sut/AccountStateBadge.cs" />
+    <Compile Include="../../src/BuddyDeck.App/Controls/EmptyState.cs"
+             Link="Sut/EmptyState.cs" />
+    <Compile Include="../../src/BuddyDeck.App/Controls/StatusRail.cs"
+             Link="Sut/StatusRail.cs" />
+    <!--
+      Converters/ValueConverters.cs 依赖 System.Windows.Data（IValueConverter）
+      和 WPF-UI 的 Application 类，测试项目已经有 UseWPF，可以编。
+      但它引用了 Wpf.Ui 的全局 using（在真项目里由 GlobalUsings.cs 提供），
+      所以本文件里把那几条 global using 也镜像一份。
+    -->
+    <Compile Include="../../src/BuddyDeck.App/Converters/ValueConverters.cs"
+             Link="Sut/ValueConverters.cs" />
+    <!-- ui 写的：AccountState 枚举 + AccountPresentation。我引用它的词表。 -->
+    <Compile Include="../../src/BuddyDeck.App/Services/AccountPresentation.cs"
+             Link="Sut/AccountPresentation.cs" />
+    <!--
+      IGatewayClient.cs —— 里面有 AccountSummary / GatewayResult / PoolSummary
+      等契约类型，以及 HttpGatewayClient 与 NotConnectedGatewayClient 两个实现。
+
+      为什么要链接它（本来想用桩绕开）：
+        GatewayClientNeverThrowsTests 要验证「网关没起时 17 个操作都不抛」这条**真实契约**。
+        用桩测不了 —— 桩是我写的，它不抛只能证明我的桩不抛。
+        必须测**真实的 HttpGatewayClient** 打到一个空端口上的行为。
+
+      ⚠ 它同时提供了 AccountSummary 的真实定义，所以 TestDoubles.cs 里的
+        AccountSummary 桩必须删掉（否则 CS0101 重复定义）。
+        AccountState 枚举本来就在 AccountPresentation.cs 里，不重复。
+    -->
+    <Compile Include="../../src/BuddyDeck.App/Services/IGatewayClient.cs"
+             Link="Sut/IGatewayClient.cs" />
+
+    <!--
+      Services/ImageInput.cs —— 聊天发图的编码与校验（t64）。
+      ⚠ 它**不碰 WPF**（剪贴板那一块走 IClipboardImageSource 注入），
+        所以能在本项目的 MTA 测试线程上直接跑。
+        WPF 实现（Services/WpfClipboardImageSource.cs）**刻意不链接** ——
+        它需要 STA + 消息泵，链接进来只会带来编译期噪音而测不了。
+    -->
+    <Compile Include="../../src/BuddyDeck.App/Services/ImageInput.cs"
+             Link="Sut/ImageInput.cs" />
+
+    <!--
+      Services/AccountImport.cs —— 账号导入的解析与校验（t81）。
+      ⚠ 它**不碰 WPF**（文件选择器走 IFilePicker 注入），
+        所以能在本项目的 MTA 测试线程上直接跑。
+        WPF 实现（Services/WpfFilePicker.cs）**刻意不链接** ——
+        它需要 STA + 窗口句柄（OpenFileDialog.ShowDialog），
+        链接进来只会带来编译期噪音而测不了。
+    -->
+    <Compile Include="../../src/BuddyDeck.App/Services/AccountImport.cs"
+             Link="Sut/AccountImport.cs" />
+
+    <!--
+      Services/StatsPresentation.cs —— 用量统计的纯逻辑（t72）：
+      时间范围、按范围聚合、大数字格式化、空态文案。
+
+      ⚠ 它**依赖 BuddyDeck.Core 的 UsageLedgerRecord** —— 本测试项目
+        已经通过 ProjectReference 引用了 Core（见上面的 ItemGroup），
+        所以这条链接不需要额外引包。
+      ⚠ 同样不碰 WPF，能在 MTA 测试线程上直接跑。
+    -->
+    <Compile Include="../../src/BuddyDeck.App/Services/StatsPresentation.cs"
+             Link="Sut/StatsPresentation.cs" />
+
+    <!--
+      ChatMedia.cs（t62 加）：聊天媒体的**纯逻辑** —— 内容块模型、
+      SSE delta 里的媒体识别、URL 白名单判定、尺寸约定。
+
+      ⚠ 为什么不是 ChatViewModel.cs：那个文件用了 [ObservableProperty] /
+      [RelayCommand]，依赖 CommunityToolkit 的**源生成器在编译期展开**。
+      而源生成器**不会为 Compile Include 进来的文件跑**（它属于另一个程序集的编译），
+      所以链接 ViewModel 会得到 CS0246 + CS0759（分部方法没有实现声明）——
+      这是机制性的，加包也解决不了。
+      所以按本项目既有约定：**纯逻辑进 Services，ViewModel 只留绑定 glue。**
+    -->
+    <Compile Include="../../src/BuddyDeck.App/Services/ChatMedia.cs"
+             Link="Sut/ChatMedia.cs" />
+
+    <!-- 模型页的纯逻辑（排序 + 行模型）。同 ChatMedia 的理由：
+         它不含 ObservableProperty/RelayCommand，所以可以被链接进来测。 -->
+    <Compile Include="../../src/BuddyDeck.App/Services/ModelsPresentation.cs"
+             Link="Sut/ModelsPresentation.cs" />
+
+    <!-- 左侧导航的纯逻辑（t80）：折叠阈值、tooltip、选中态规则。
+         全是纯函数，不含 MVVM —— 与上面几个文件同一模式。 -->
+    <Compile Include="../../src/BuddyDeck.App/Services/ShellNavigation.cs"
+             Link="Sut/ShellNavigation.cs" />
+
+    <!--
+      Services/KeyManagement.cs —— 「密钥」页的纯逻辑（t75）：
+      前缀显示、状态与按钮可用性、创建时间格式化、名称校验、失败文案。
+
+      ⚠ 同样遵守本项目的既有裁定：**要测的逻辑放 Services/，ViewModel 只留绑定 glue。**
+        因为 CommunityToolkit 的源生成器**不为 Compile Include 进来的文件跑**
+        ⇒ 链接 KeysViewModel 必然 CS0246（ObservableObject 找不到）
+          + CS0759（分部方法没有实现声明）。机制性的，加包也解决不了。
+        见上面 ChatMedia.cs / ModelsPresentation.cs 的同一结论。
+
+      ⚠ 它**不碰 WPF**（纯字符串 / 时间 / 枚举推导），
+        所以能在本项目的 MTA 测试线程上直接跑。
+    -->
+    <Compile Include="../../src/BuddyDeck.App/Services/KeyManagement.cs"
+             Link="Sut/KeyManagement.cs" />
+
+    <!-- 实证结论（captain 实测，勿再试）：把 ViewModel 链进来必然报
+         CS0246（ObservableObject/ObservableProperty 找不到）+ CS0759
+         （OnSearchChanged/OnSortChanged 分部方法没有实现声明）。
+         ⇒ **源生成器确实不为 Compile Include 的文件跑**，这是机制限制，
+           与加不加 CommunityToolkit 包无关。
+         ⇒ 所以 ViewModel **不链接**；要测的逻辑放 Services/ModelsPresentation.cs。
+           同一结论见 Services/ChatMedia.cs（t62 走过同一条路）。 -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ValueConverters.cs 用到 Wpf.Ui 的类型（通过全局 using 传入）。 -->
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
+
+    <!--
+      ⚠ 这里曾有 System.Text.Encoding.CodePages 包引用 —— **已撤掉**。
+      它是为 t81 早期的「GBK 双重编码标签还原」加的（那个还原需要
+      `Encoding.GetEncoding("GBK")`）。后来实测确认真实文件的 label
+      **是正常中文、没有任何乱码**，那套还原已整个删除
+      （见 Services/AccountImport.cs 的 LabelOf 注释），
+      所以这个包引用也没有存在意义了。
+      **经验保留：判断编码问题必须用 read 工具或字节层，不能用
+        Get-Content 的终端显示。**
+    -->
+  </ItemGroup>
+
+</Project>

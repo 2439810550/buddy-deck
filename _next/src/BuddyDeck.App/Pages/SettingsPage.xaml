@@ -1,0 +1,175 @@
+<UserControl
+    x:Class="BuddyDeck.App.Pages.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    d:DesignHeight="700"
+    d:DesignWidth="1000"
+    mc:Ignorable="d">
+
+    <!--
+        设置页。
+        只放「改完会影响别的东西」的项 —— 纯展示的信息在总览页，不塞进设置里凑数。
+        表单是纵列的，不是两列的卡片网格：一列读下来不用来回找对应关系。
+    -->
+    <ScrollViewer Padding="{StaticResource SpacePage}" VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="{StaticResource SizeMaxReadingWidth}">
+
+            <TextBlock
+                Style="{DynamicResource TextPageTitle}"
+                Foreground="{DynamicResource TextPrimaryBrush}"
+                Text="设置" />
+            <TextBlock
+                Margin="0,5,0,0"
+                Style="{DynamicResource TextSmall}"
+                Foreground="{DynamicResource TextSecondaryBrush}"
+                Text="端口、密钥、变体、保险库位置" />
+
+            <!-- 网关 -->
+            <TextBlock
+                Margin="0,26,0,0"
+                Style="{DynamicResource TextSectionTitle}"
+                Foreground="{DynamicResource TextPrimaryBrush}"
+                Text="网关" />
+
+            <Border
+                Margin="0,10,0,0"
+                Padding="{StaticResource SpaceControl}"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource HairlineBrush}"
+                BorderThickness="{StaticResource BorderHairline}"
+                CornerRadius="{StaticResource RadiusPanel}">
+                <StackPanel>
+                    <TextBlock
+                        Style="{DynamicResource FieldLabel}"
+                        Text="监听端口" />
+                    <TextBlock
+                        Margin="0,4,0,8"
+                        Style="{DynamicResource TextSmall}"
+                        Foreground="{DynamicResource TextTertiaryBrush}"
+                        Text="客户端连 http://127.0.0.1:这个端口/v1" />
+                    <ui:TextBox
+                        Width="200"
+                        HorizontalAlignment="Left"
+                        PlaceholderText="8791"
+                        Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <TextBlock
+                        Margin="0,16,0,6"
+                        Style="{DynamicResource FieldLabel}"
+                        Text="API key" />
+                    <ui:TextBox
+                        PlaceholderText="客户端要带的密钥"
+                        Text="{Binding ApiKey, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+            </Border>
+
+            <!-- 变体 -->
+            <TextBlock
+                Margin="0,24,0,0"
+                Style="{DynamicResource TextSectionTitle}"
+                Foreground="{DynamicResource TextPrimaryBrush}"
+                Text="变体" />
+
+            <Border
+                Margin="0,10,0,0"
+                Padding="{StaticResource SpaceControl}"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource HairlineBrush}"
+                BorderThickness="{StaticResource BorderHairline}"
+                CornerRadius="{StaticResource RadiusPanel}">
+                <StackPanel>
+                    <TextBlock
+                        Style="{DynamicResource FieldLabel}"
+                        Text="连国内版还是国际版" />
+                    <ComboBox
+                        Margin="0,8,0,0"
+                        HorizontalAlignment="Left"
+                        DisplayMemberPath="Name"
+                        ItemsSource="{Binding Variants}"
+                        SelectedItem="{Binding SelectedVariant}"
+                        Width="220" />
+                    <TextBlock
+                        Margin="0,8,0,0"
+                        Style="{DynamicResource TextSmall}"
+                        Foreground="{DynamicResource TextTertiaryBrush}"
+                        Text="{Binding SelectedVariant.Detail}" />
+                </StackPanel>
+            </Border>
+
+            <!-- 文件位置 -->
+            <TextBlock
+                Margin="0,24,0,0"
+                Style="{DynamicResource TextSectionTitle}"
+                Foreground="{DynamicResource TextPrimaryBrush}"
+                Text="文件位置" />
+
+            <Border
+                Margin="0,10,0,0"
+                Padding="{StaticResource SpaceControl}"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource HairlineBrush}"
+                BorderThickness="{StaticResource BorderHairline}"
+                CornerRadius="{StaticResource RadiusPanel}">
+                <StackPanel>
+                    <TextBlock
+                        Style="{DynamicResource FieldLabel}"
+                        Text="保险库" />
+                    <TextBlock
+                        Margin="0,4,0,8"
+                        Style="{DynamicResource TextSmall}"
+                        Foreground="{DynamicResource TextTertiaryBrush}"
+                        Text="里面是明文 token，别放进同步盘" />
+                    <ui:TextBox
+                        PlaceholderText="C:\Users\…\.workbuddy\auth.cn.json"
+                        Text="{Binding VaultPath, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <TextBlock
+                        Margin="0,16,0,6"
+                        Style="{DynamicResource FieldLabel}"
+                        Text="网关日志" />
+                    <ui:TextBox
+                        PlaceholderText="C:\Users\…\.workbuddy\gateway.log"
+                        Text="{Binding LogPath, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+            </Border>
+
+            <!-- 保存 -->
+            <StackPanel Margin="0,20,0,0" Orientation="Horizontal">
+                <ui:Button
+                    Appearance="Primary"
+                    Command="{Binding SaveCommand}"
+                    Content="保存设置" />
+                <ui:Button
+                    Margin="8,0,0,0"
+                    Appearance="Transparent"
+                    Command="{Binding LoadCommand}"
+                    Content="重新读取" />
+            </StackPanel>
+
+            <Border
+                Margin="0,14,0,0"
+                Padding="10,8,10,8"
+                Background="{DynamicResource RailSubtleBrush}"
+                BorderBrush="{DynamicResource HairlineBrush}"
+                BorderThickness="{StaticResource BorderHairline}"
+                CornerRadius="{StaticResource RadiusRow}"
+                Visibility="{Binding Notice, Converter={StaticResource StringToVisibility}}">
+                <TextBlock Text="{Binding Notice}" TextWrapping="Wrap">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock"><Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" /><Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+                            <Setter Property="Foreground" Value="{DynamicResource OkBrush}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding NoticeIsError}" Value="True">
+                                    <Setter Property="Foreground" Value="{DynamicResource StopBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

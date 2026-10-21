@@ -1,0 +1,268 @@
+<!--
+  Controls.xaml —— 可复用的控件样式。
+
+  ## 这个文件装什么
+
+  1. ListRow 系列：列表行。**这是全项目最重要的一个样式** —— 它承载了
+     「层级用结构表达，不用装饰」这条原则的落地。
+  2. PrimaryButton / QuietButton：两种按钮。只有两种。
+  3. FieldInput：表单输入框。
+  4. SectionDivider：区块之间的分隔。
+  5. bd: 自绘控件的默认样式。
+
+  ## 这个文件不装什么
+
+  · **不装转换器实例** —— 那些在 App.xaml 里声明（见 docs/ui-design-plan.md 4.6）。
+  · **不装颜色/字号字面量** —— 一律引 Colors.xaml / Typography.xaml / Metrics.xaml。
+    这个文件里出现 "#..." 或裸数字（除 Padding 这类局部几何）就是 bug。
+  · **不装 BasedOn 别的字典里样式的 Style** —— BasedOn 只吃 StaticResource，
+    跨字典会加载失败。ListRowTitle / FieldValue 这些复合样式因此住在
+    Typography.xaml 里（见该文件末尾）。
+
+  ## 列表行为什么长这样
+
+       ┌────────────────────────────────────────────────────┐
+       │▌ 默认池 · 主号                     [可用]           │  ← 3px 状态条 + 内容 + 徽章
+       │▌ 企业 · a1b2c3d4…            剩 12 天 · 06-12 09:30│
+       └────────────────────────────────────────────────────┘
+          ↑
+          左侧 3px 竖条：状态的第一层表达，扫过去也能看见
+
+  行的边界用 **下边 1px HairlineBrush**，不是卡片、不是阴影、不是圆角外框。
+  悬停时底色从 SurfaceBrush 抬到 RailBrush（明度阶梯），**不加阴影** ——
+  阴影是「悬浮」的隐喻，而列表不悬浮。
+
+  圆角 RadiusRow(4)：行是**排队的单位**，方一点才像表。
+
+  ## 为什么只有两种按钮
+
+  PrimaryButton（琥珀底、深字）= 这一页的主动作，一页最多一个。
+  QuietButton（透明底、悬停抬升）= 其余全部。
+
+  没有 Danger 按钮 —— 危险动作（删除）走「先点 QuietButton 再确认」，
+  不用一个红色的按钮去引诱误点。
+
+  ## ⚠ 资源引用规则
+
+  所有 Setter / TemplateBinding 之外的资源引用都用 **DynamicResource**。
+  原因：这本字典被 App.xaml 与另外四本一起 merge，
+  StaticResource 在解析期查不到兄弟字典的 key，会抛 XamlParseException。
+  这个坑是 ThemeResourceTests 抓出来的，别改回去。
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:bd="clr-namespace:BuddyDeck.App.Controls">
+
+  <!-- ==================================================================
+       列表行
+       ================================================================== -->
+
+  <!-- 行容器。左侧 3px 状态条的载体：Border 的 BorderThickness 只开左边时
+       会和下边线冲突，所以状态条用单独的 Rectangle 叠在内容前面（见下）。 -->
+  <Style x:Key="ListRow" TargetType="Border">
+    <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource HairlineBrush}" />
+    <!-- 只画下边一条线：行与行的边界。左右上都不画 —— 那是卡片。 -->
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+
+  <!-- 行的内层：真正的内边距在它身上，这样左侧状态条能顶到行边缘。 -->
+  <Style x:Key="ListRowContent" TargetType="Grid">
+    <Setter Property="Margin" Value="12,12,12,12" />
+  </Style>
+
+  <!-- 行左侧的 3px 状态条。颜色由绑定给（AccountStateBrush + 参数 rail）。 -->
+  <Style x:Key="ListRowRail" TargetType="Rectangle">
+    <Setter Property="Width" Value="{DynamicResource SizeRowRail}" />
+    <Setter Property="HorizontalAlignment" Value="Left" />
+    <Setter Property="Stretch" Value="Fill" />
+    <Setter Property="Fill" Value="{DynamicResource IdleRailBrush}" />
+  </Style>
+
+  <!-- ==================================================================
+       按钮
+       ================================================================== -->
+
+  <!-- 主按钮：一页最多一个。琥珀底 + 深字（不是白字 —— 琥珀上的白字对比度不够）。 -->
+  <Style x:Key="PrimaryButton" TargetType="Button">
+    <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+    <Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="FontWeight" Value="{DynamicResource FontWeightEmphasis}" />
+    <Setter Property="Padding" Value="14,7,14,7" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Root"
+                  Background="{TemplateBinding Background}"
+                  CornerRadius="{DynamicResource RadiusRow}"
+                  Padding="{TemplateBinding Padding}"
+                  SnapsToDevicePixels="True">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <!-- 悬停：只压一点点明度，不做位移、不做阴影 -->
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Root" Property="Opacity" Value="0.88" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="Root" Property="Opacity" Value="0.72" />
+            </Trigger>
+            <!-- 禁用：置灰但不隐藏 —— 用户要能看见「有这个动作，现在还不能用」 -->
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter TargetName="Root" Property="Opacity" Value="0.4" />
+              <Setter Property="Cursor" Value="Arrow" />
+            </Trigger>
+            <!-- 键盘焦点：必须可见（质量下限） -->
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource FocusBrush}" />
+              <Setter TargetName="Root" Property="BorderThickness" Value="{DynamicResource StrokeFocus}" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- 安静按钮：其余全部动作。默认透明，悬停才出现底色。 -->
+  <Style x:Key="QuietButton" TargetType="Button">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    <Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="Padding" Value="12,7,12,7" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Root"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="Transparent"
+                  BorderThickness="{DynamicResource StrokeFocus}"
+                  CornerRadius="{DynamicResource RadiusRow}"
+                  Padding="{TemplateBinding Padding}"
+                  SnapsToDevicePixels="True">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Root" Property="Background" Value="{DynamicResource RailBrush}" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="Root" Property="Background" Value="{DynamicResource RailSubtleBrush}" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+              <Setter Property="Cursor" Value="Arrow" />
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource FocusBrush}" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- 表单里用的输入框。边框 1px，聚焦时变琥珀。 -->
+  <Style x:Key="FieldInput" TargetType="TextBox">
+    <Setter Property="Background" Value="{DynamicResource InkBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    <Setter Property="CaretBrush" Value="{DynamicResource AccentBrush}" />
+    <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}" />
+    <Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="Padding" Value="8,6,8,6" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="TextBox">
+          <Border x:Name="Root"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{DynamicResource HairlineBrush}"
+                  BorderThickness="{DynamicResource BorderHairline}"
+                  CornerRadius="{DynamicResource RadiusRow}">
+            <ScrollViewer x:Name="PART_ContentHost"
+                          Margin="{TemplateBinding Padding}"
+                          VerticalAlignment="Center" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource FocusBrush}" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- ==================================================================
+       区块与分隔
+       ================================================================== -->
+
+  <!-- 区块之间的分隔线。1px，宽度撑满。不是发丝装饰 —— 它是结构边界。 -->
+  <Style x:Key="SectionDivider" TargetType="Border">
+    <Setter Property="Height" Value="{DynamicResource StrokeHairline}" />
+    <Setter Property="Background" Value="{DynamicResource HairlineBrush}" />
+  </Style>
+
+  <!-- ==================================================================
+       自绘控件的默认样式
+       ================================================================== -->
+
+  <!-- QuotaBar 是靠重写 OnRender 画的，不需要模板，只需要一个不冲突的默认样式。 -->
+  <Style TargetType="bd:QuotaBar">
+    <Setter Property="Height" Value="22" />
+    <Setter Property="MinWidth" Value="80" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+  </Style>
+
+  <!--
+    StatusRail：**不设 Height**。
+
+    它会自己算高度（MeasureOverride 按条数撑开）——
+    在这里写死一个 Height 只是掩盖症状：下次谁把它换个容器
+    （比如从 DockPanel 挪进 Grid 的 Auto 行）还会塌成 0。
+    控件应该自己决定「我要多大」，而不是依赖使用方每次记得给高度。
+
+    ⚠ 曾经因为漏了 MeasureOverride，这个控件量成 0×0 后**永远什么都不画**
+    （不报错、不抛异常）。见 StatusRail.cs 的类注释与
+    tests/BuddyDeck.App.Presentation.Tests/StatusRailLayoutTests.cs。
+  -->
+  <Style TargetType="bd:StatusRail">
+    <Setter Property="Width" Value="{DynamicResource SizeStatusRail}" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+  </Style>
+
+  <Style TargetType="bd:StatusDot">
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Margin" Value="0,0,8,0" />
+  </Style>
+
+  <Style TargetType="bd:AccountStateBadge">
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="HorizontalAlignment" Value="Right" />
+  </Style>
+
+  <Style TargetType="bd:EmptyState">
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="MaxWidth" Value="{DynamicResource SizeMaxReadingWidth}" />
+    <Setter Property="Margin" Value="24" />
+  </Style>
+
+  <Style TargetType="bd:ErrorState">
+    <Setter Property="HorizontalAlignment" Value="Left" />
+    <Setter Property="VerticalAlignment" Value="Top" />
+    <Setter Property="MaxWidth" Value="{DynamicResource SizeMaxReadingWidth}" />
+    <Setter Property="Margin" Value="0,0,0,16" />
+  </Style>
+
+</ResourceDictionary>

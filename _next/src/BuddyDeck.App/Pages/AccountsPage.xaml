@@ -1,0 +1,761 @@
+<UserControl
+    x:Class="BuddyDeck.App.Pages.AccountsPage"
+    x:Name="PageRoot"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:bd="clr-namespace:BuddyDeck.App.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    d:DesignHeight="700"
+    d:DesignWidth="1000"
+    mc:Ignorable="d">
+
+    <!--
+        账号页（重构版）：卡片网格 + 悬浮动效 + 点击展开详情。
+
+        ## 为什么从「行式列表 + 右侧详情」改成「卡片网格」
+
+        旧版每行塞了积分包、冷却、徽章、余量条、到期时间等一堆数据 ——
+        用户实测反馈「不明面展示这么多复杂数据」。所以：
+          · 卡片**默认只显示**：状态点、名字、余额三个核心信息
+          · **悬浮**：卡片微微放大（ScaleTransform），告诉用户「可点」
+          · **点击**：选中卡片，右侧浮层滑入展示全部详情
+          · 复杂数据（积分包、冷却、token）都收进详情浮层，不在网格里堆
+
+        ## 动效（对齐 Motion.xaml 的规则）
+
+        · 悬浮放大：180ms（MotionExpand）—— 动作的回应，不是入场动画
+        · 详情浮层：右侧滑入 + 淡入
+        · 没有散落的入场动画 —— 首帧就位，只有用户交互才动
+    -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- ======== 页头 + 动作 ======== -->
+        <Grid Grid.Row="0" Margin="28,22,28,0">
+            <StackPanel>
+                <TextBlock
+                    Style="{DynamicResource TextPageTitle}"
+                    Foreground="{DynamicResource TextPrimaryBrush}"
+                    Text="账号" />
+                <TextBlock
+                    Margin="0,5,0,0"
+                    Style="{DynamicResource TextSmall}"
+                    Foreground="{DynamicResource TextSecondaryBrush}"
+                    Text="悬浮看余额，点开看详情" />
+
+                <!-- 池子总积分 -->
+                <StackPanel
+                    Margin="0,10,0,0"
+                    Orientation="Horizontal"
+                    Visibility="{Binding PoolCreditTotal, Converter={StaticResource StringToVisibility}}">
+                    <TextBlock
+                        VerticalAlignment="Bottom"
+                        Style="{DynamicResource TextNumberStrong}"
+                        Foreground="{DynamicResource AccentBrush}"
+                        Text="{Binding PoolCreditTotal}" />
+                    <TextBlock
+                        Margin="8,0,0,1"
+                        VerticalAlignment="Bottom"
+                        Style="{DynamicResource TextMicro}"
+                        Foreground="{DynamicResource TextTertiaryBrush}"
+                        Text="池子总积分" />
+                    <TextBlock
+                        Margin="10,0,0,1"
+                        VerticalAlignment="Bottom"
+                        Style="{DynamicResource TextMicro}"
+                        Foreground="{DynamicResource TextTertiaryBrush}"
+                        Text="{Binding PoolCreditDetail}" />
+                </StackPanel>
+            </StackPanel>
+
+            <StackPanel
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Orientation="Horizontal">
+                <ui:Button
+                    Margin="0,0,8,0"
+                    Appearance="Secondary"
+                    Click="OnImportMenuClick"
+                    Content="导入账号"
+                    Icon="{ui:SymbolIcon Symbol=ArrowDownload24}" />
+                <ui:Button
+                    Margin="0,0,8,0"
+                    Appearance="Secondary"
+                    Command="{Binding ToggleExportBoxCommand}"
+                    Content="导出账号"
+                    Icon="{ui:SymbolIcon Symbol=ArrowExportUp24}" />
+                <ui:Button
+                    Margin="0,0,8,0"
+                    Appearance="Primary"
+                    Command="{Binding CheckinAllCommand}"
+                    Content="一键签到"
+                    Icon="{ui:SymbolIcon Symbol=Checkmark24}"
+                    ToolTip="给全部账号执行每日签到" />
+                <ui:Button
+                    Margin="0,0,8,0"
+                    Appearance="Secondary"
+                    Command="{Binding RefreshCreditsCommand}"
+                    Content="刷新积分"
+                    Icon="{ui:SymbolIcon Symbol=ArrowSync24}"
+                    ToolTip="后台重新拉取全部账号的最新积分（进度在右侧任务库）" />
+                <ui:Button
+                    Appearance="Secondary"
+                    Command="{Binding RefreshCommand}"
+                    Content="刷新"
+                    Icon="{ui:SymbolIcon Symbol=ArrowSync24}" />
+            </StackPanel>
+        </Grid>
+
+        <!-- ======== 主体：卡片网格 + 详情浮层 ======== -->
+        <Grid Grid.Row="1" Margin="28,16,28,24">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 左：账号卡片网格 + 辅助面板（限流/导入/导出/通知） -->
+            <ScrollViewer
+                Grid.Column="0"
+                VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <!-- 搜索框 -->
+                    <ui:TextBox
+                        Margin="0,0,0,12"
+                        PlaceholderText="搜索标签 / uid / 域名"
+                        Text="{Binding Filter, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <!-- 模型限流提醒（有问题的模型才显示） -->
+                    <Border
+                        Margin="0,0,0,10"
+                        Padding="{StaticResource SpaceControl}"
+                        Background="{DynamicResource SurfaceBrush}"
+                        BorderBrush="{DynamicResource HairlineBrush}"
+                        BorderThickness="{StaticResource BorderHairline}"
+                        CornerRadius="{StaticResource RadiusPanel}"
+                        Visibility="{Binding HasProblemModels, Converter={StaticResource BoolToVisibility}}">
+                        <StackPanel>
+                            <TextBlock
+                                Style="{DynamicResource TextBody}"
+                                FontWeight="SemiBold"
+                                Foreground="{DynamicResource TextPrimaryBrush}"
+                                Text="模型限流" />
+                            <ItemsControl Margin="0,8,0,0" ItemsSource="{Binding ProblemModels}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,3,0,3">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock
+                                                Grid.Column="0"
+                                                MinWidth="150"
+                                                VerticalAlignment="Center"
+                                                Text="{Binding Model}">
+                                                <TextBlock.Style>
+                                                    <Style BasedOn="{StaticResource TextSmall}" TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsBlocked}" Value="True">
+                                                                <Setter Property="Foreground" Value="{DynamicResource WarnBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock
+                                                Grid.Column="1"
+                                                Margin="8,0,8,0"
+                                                VerticalAlignment="Center"
+                                                Style="{StaticResource TextSmall}"
+                                                Text="{Binding StatusText}"
+                                                TextWrapping="Wrap" />
+                                            <TextBlock
+                                                Grid.Column="2"
+                                                VerticalAlignment="Center"
+                                                Style="{DynamicResource TextNumber}"
+                                                FontSize="{StaticResource FontSizeBadge}"
+                                                Foreground="{DynamicResource TextTertiaryBrush}"
+                                                Text="{Binding AvailabilityText}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 导入选择面板 -->
+                    <Border
+                        Margin="0,0,0,10"
+                        Padding="{StaticResource SpaceControl}"
+                        Background="{DynamicResource SurfaceBrush}"
+                        BorderBrush="{DynamicResource HairlineBrush}"
+                        BorderThickness="{StaticResource BorderHairline}"
+                        CornerRadius="{StaticResource RadiusPanel}"
+                        Visibility="{Binding ShowImportBox, Converter={StaticResource BoolToVisibility}}">
+                        <StackPanel>
+                            <TextBlock
+                                Style="{DynamicResource TextBody}"
+                                FontWeight="SemiBold"
+                                Foreground="{DynamicResource TextPrimaryBrush}"
+                                Text="从哪里导入账号？" />
+                            <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                                <ui:Button
+                                    Margin="0,0,8,0"
+                                    Appearance="Primary"
+                                    Command="{Binding ImportFromLegacyCommand}"
+                                    Content="从旧版目录" />
+                                <ui:Button
+                                    Appearance="Secondary"
+                                    Command="{Binding PickImportFileCommand}"
+                                    Content="选登录文件" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 导入确认框 -->
+                    <Border
+                        Margin="0,0,0,10"
+                        Padding="{StaticResource SpaceControl}"
+                        Background="{DynamicResource SurfaceBrush}"
+                        BorderBrush="{DynamicResource HairlineBrush}"
+                        BorderThickness="{StaticResource BorderHairline}"
+                        CornerRadius="{StaticResource RadiusPanel}"
+                        Visibility="{Binding HasPendingImport, Converter={StaticResource BoolToVisibility}}">
+                        <StackPanel>
+                            <TextBlock
+                                Style="{DynamicResource TextBody}"
+                                FontWeight="SemiBold"
+                                Foreground="{DynamicResource TextPrimaryBrush}"
+                                Text="确认导入" />
+                            <TextBlock
+                                Margin="0,8,0,0"
+                                Style="{DynamicResource TextSmall}"
+                                Foreground="{DynamicResource TextSecondaryBrush}"
+                                Text="{Binding PendingSummary}"
+                                TextWrapping="Wrap" />
+                            <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                                <ui:Button
+                                    Margin="0,0,8,0"
+                                    Appearance="Primary"
+                                    Command="{Binding ConfirmImportCommand}"
+                                    Content="导入" />
+                                <ui:Button
+                                    Appearance="Transparent"
+                                    Command="{Binding CancelImportCommand}"
+                                    Content="取消" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 导出面板 -->
+                    <Border
+                        Margin="0,0,0,10"
+                        Padding="{StaticResource SpaceControl}"
+                        Background="{DynamicResource SurfaceBrush}"
+                        BorderBrush="{DynamicResource HairlineBrush}"
+                        BorderThickness="{StaticResource BorderHairline}"
+                        CornerRadius="{StaticResource RadiusPanel}"
+                        Visibility="{Binding ShowExportBox, Converter={StaticResource BoolToVisibility}}">
+                        <StackPanel>
+                            <TextBlock
+                                Style="{DynamicResource TextBody}"
+                                FontWeight="SemiBold"
+                                Foreground="{DynamicResource TextPrimaryBrush}"
+                                Text="导出账号" />
+                            <TextBlock
+                                Margin="0,8,0,6"
+                                Style="{DynamicResource TextSmall}"
+                                Foreground="{DynamicResource TextTertiaryBrush}"
+                                Text="给导出的文件设一个口令（至少 8 个字符）" />
+                            <PasswordBox
+                                Width="260"
+                                HorizontalAlignment="Left"
+                                PasswordChanged="OnExportPassphraseChanged" />
+                            <ui:Button
+                                Margin="0,10,0,0"
+                                HorizontalAlignment="Left"
+                                Appearance="Primary"
+                                Command="{Binding ExportCommand}"
+                                Content="导出" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 通知条 -->
+                    <Border
+                        Margin="0,0,0,10"
+                        Padding="10,8,10,8"
+                        Background="{DynamicResource RailSubtleBrush}"
+                        BorderBrush="{DynamicResource HairlineBrush}"
+                        BorderThickness="{StaticResource BorderHairline}"
+                        CornerRadius="{StaticResource RadiusRow}"
+                        Visibility="{Binding Notice, Converter={StaticResource StringToVisibility}}">
+                        <TextBlock Text="{Binding Notice}" TextWrapping="Wrap">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock"><Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" /><Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource OkBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding NoticeIsError}" Value="True">
+                                            <Setter Property="Foreground" Value="{DynamicResource StopBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Border>
+
+                    <!-- ★ 账号卡片网格 -->
+                    <ItemsControl ItemsSource="{Binding Rows}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <!--
+                                    卡片：默认只显示状态点 + 名字 + 余额。
+                                    悬浮放大（ScaleTransform），点击选中。
+                                -->
+                                <Border
+                                    Width="210"
+                                    Margin="0,0,12,12"
+                                    Padding="14,12"
+                                    Background="{DynamicResource SurfaceBrush}"
+                                    BorderBrush="{DynamicResource HairlineBrush}"
+                                    BorderThickness="{StaticResource BorderHairline}"
+                                    CornerRadius="{StaticResource RadiusPanel}"
+                                    Cursor="Hand"
+                                    MouseLeftButtonUp="OnSelectAccount"
+                                    Tag="{Binding}"
+                                    RenderTransformOrigin="0.5,0.5">
+                                    <Border.RenderTransform>
+                                        <ScaleTransform ScaleX="1" ScaleY="1" />
+                                    </Border.RenderTransform>
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="RenderTransform">
+                                                <Setter.Value>
+                                                    <ScaleTransform ScaleX="1" ScaleY="1" />
+                                                </Setter.Value>
+                                            </Setter>
+                                            <Style.Triggers>
+                                                <!-- 悬浮：微微放大 -->
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Trigger.EnterActions>
+                                                        <BeginStoryboard>
+                                                            <Storyboard>
+                                                                <DoubleAnimation
+                                                                    Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                    To="1.04" Duration="{StaticResource MotionExpand}" />
+                                                                <DoubleAnimation
+                                                                    Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                    To="1.04" Duration="{StaticResource MotionExpand}" />
+                                                            </Storyboard>
+                                                        </BeginStoryboard>
+                                                    </Trigger.EnterActions>
+                                                    <Trigger.ExitActions>
+                                                        <BeginStoryboard>
+                                                            <Storyboard>
+                                                                <DoubleAnimation
+                                                                    Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                    To="1" Duration="{StaticResource MotionExpand}" />
+                                                                <DoubleAnimation
+                                                                    Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                    To="1" Duration="{StaticResource MotionExpand}" />
+                                                            </Storyboard>
+                                                        </BeginStoryboard>
+                                                    </Trigger.ExitActions>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal">
+                                            <!-- 状态点 -->
+                                            <bd:StatusDot
+                                                Margin="0,0,8,0"
+                                                VerticalAlignment="Center"
+                                                Online="{Binding Active}" />
+                                            <TextBlock
+                                                Style="{DynamicResource TextBody}"
+                                                FontWeight="SemiBold"
+                                                Foreground="{DynamicResource TextPrimaryBrush}"
+                                                Text="{Binding DisplayName}"
+                                                TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+
+                                        <!-- 状态徽章 -->
+                                        <StackPanel Margin="0,8,0,0" Orientation="Horizontal">
+                                            <bd:AccountStateBadge State="{Binding State}" />
+                                            <Border
+                                                Margin="6,0,0,0"
+                                                Padding="5,1,5,1"
+                                                VerticalAlignment="Center"
+                                                Background="{DynamicResource WarnBadgeBackgroundBrush}"
+                                                CornerRadius="{StaticResource RadiusBar}"
+                                                Visibility="{Binding CreditAtRisk, Converter={StaticResource BoolToVisibility}}">
+                                                <TextBlock
+                                                    FontSize="{StaticResource FontSizeBadge}"
+                                                    Foreground="{DynamicResource WarnBrush}"
+                                                    Text="积分临期" />
+                                            </Border>
+                                            <Border
+                                                Margin="6,0,0,0"
+                                                Padding="5,1,5,1"
+                                                VerticalAlignment="Center"
+                                                Background="{DynamicResource WarnBadgeBackgroundBrush}"
+                                                CornerRadius="{StaticResource RadiusBar}"
+                                                Visibility="{Binding Frozen, Converter={StaticResource BoolToVisibility}}">
+                                                <TextBlock
+                                                    FontSize="{StaticResource FontSizeBadge}"
+                                                    Foreground="{DynamicResource WarnBrush}"
+                                                    Text="{Binding FrozenText}" />
+                                            </Border>
+                                        </StackPanel>
+
+                                        <!-- 余额大字（有积分才显示） -->
+                                        <TextBlock
+                                            Margin="0,10,0,0"
+                                            Style="{DynamicResource TextNumberStrong}"
+                                            Foreground="{DynamicResource TextPrimaryBrush}"
+                                            Text="{Binding CreditTotal}"
+                                            Visibility="{Binding HasCredits, Converter={StaticResource BoolToVisibility}}" />
+
+                                        <!-- 余量条 -->
+                                        <Grid Margin="0,8,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <bd:QuotaBar
+                                                Grid.Column="0"
+                                                Height="6"
+                                                VerticalAlignment="Center"
+                                                RemainingRatio="{Binding RemainingRatio}" />
+                                            <TextBlock
+                                                Grid.Column="1"
+                                                Margin="8,0,0,0"
+                                                VerticalAlignment="Center"
+                                                Style="{DynamicResource TextMicro}"
+                                                Foreground="{DynamicResource TextTertiaryBrush}"
+                                                Text="{Binding Remaining}" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- 空态 -->
+                    <bd:EmptyState
+                        Margin="0,40,0,0"
+                        Headline="还没有账号"
+                        Detail="导入一份登录文件就能开始。"
+                        Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}" />
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- 右：详情浮层（点卡片后滑入） -->
+            <Border
+                Grid.Column="1"
+                Width="320"
+                Margin="12,0,0,0"
+                Padding="{StaticResource SpaceControl}"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource HairlineBrush}"
+                BorderThickness="{StaticResource BorderHairline}"
+                CornerRadius="{StaticResource RadiusPanel}"
+                Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}">
+                <Grid>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <!-- 头部：名字 + 状态 -->
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    Style="{DynamicResource TextSectionTitle}"
+                                    Foreground="{DynamicResource TextPrimaryBrush}"
+                                    Text="{Binding Selected.DisplayName}"
+                                    TextTrimming="CharacterEllipsis" />
+                                <bd:AccountStateBadge
+                                    Margin="10,0,0,0"
+                                    VerticalAlignment="Center"
+                                    State="{Binding Selected.State}" />
+                            </StackPanel>
+
+                            <!-- 关闭 -->
+                            <ui:Button
+                                HorizontalAlignment="Right"
+                                Margin="0,-28,0,0"
+                                Appearance="Transparent"
+                                Click="OnCloseDetail"
+                                Content="关闭"
+                                Icon="{ui:SymbolIcon Symbol=Dismiss24}" />
+
+                            <Rectangle
+                                Height="1"
+                                Margin="0,10,0,14"
+                                Fill="{DynamicResource HairlineBrush}" />
+
+                            <!-- 余额（大字） -->
+                            <TextBlock
+                                Style="{DynamicResource TextMicro}"
+                                Foreground="{DynamicResource TextTertiaryBrush}"
+                                Text="剩余积分" />
+                            <TextBlock
+                                Margin="0,4,0,0"
+                                Style="{DynamicResource TextNumberStrong}"
+                                Foreground="{DynamicResource TextPrimaryBrush}"
+                                Text="{Binding Selected.CreditTotal}"
+                                Visibility="{Binding Selected.HasCredits, Converter={StaticResource BoolToVisibility}}" />
+                            <TextBlock
+                                Margin="0,4,0,0"
+                                Style="{DynamicResource TextSmall}"
+                                Foreground="{DynamicResource TextTertiaryBrush}"
+                                Text="{Binding Selected.CreditPackageCountText}" />
+                            <TextBlock
+                                Margin="0,2,0,0"
+                                Style="{DynamicResource TextMicro}"
+                                Foreground="{DynamicResource TextTertiaryBrush}"
+                                Text="{Binding Selected.CreditUpdatedText}" />
+
+                            <Rectangle
+                                Height="1"
+                                Margin="0,14,0,14"
+                                Fill="{DynamicResource HairlineBrush}" />
+
+                            <!-- 基本信息 -->
+                            <Grid Margin="0,0,0,9">
+                                <TextBlock Style="{DynamicResource FieldLabel}" Text="标签" />
+                                <TextBlock
+                                    HorizontalAlignment="Right"
+                                    Style="{DynamicResource FieldValue}"
+                                    Text="{Binding Selected.DisplayName}" />
+                            </Grid>
+                            <Grid Margin="0,0,0,9">
+                                <TextBlock Style="{DynamicResource FieldLabel}" Text="uid" />
+                                <TextBlock
+                                    HorizontalAlignment="Right"
+                                    Style="{DynamicResource FieldValueMono}"
+                                    Text="{Binding Selected.UidShort}" />
+                            </Grid>
+                            <Grid Margin="0,0,0,9">
+                                <TextBlock Style="{DynamicResource FieldLabel}" Text="类型" />
+                                <TextBlock
+                                    HorizontalAlignment="Right"
+                                    Style="{DynamicResource FieldValue}"
+                                    Text="{Binding Selected.Tenant}" />
+                            </Grid>
+                            <Grid Margin="0,0,0,9">
+                                <TextBlock Style="{DynamicResource FieldLabel}" Text="登录域" />
+                                <TextBlock
+                                    HorizontalAlignment="Right"
+                                    Style="{DynamicResource FieldValueMono}"
+                                    Text="{Binding Selected.Domain}" />
+                            </Grid>
+                            <Grid Margin="0,0,0,9">
+                                <TextBlock Style="{DynamicResource FieldLabel}" Text="Token 到期" />
+                                <TextBlock
+                                    HorizontalAlignment="Right"
+                                    Style="{DynamicResource FieldValueMono}"
+                                    Text="{Binding Selected.ExpiresAt}" />
+                            </Grid>
+                            <Grid Margin="0,0,0,9">
+                                <TextBlock Style="{DynamicResource FieldLabel}" Text="还剩" />
+                                <TextBlock
+                                    HorizontalAlignment="Right"
+                                    Style="{DynamicResource FieldValue}"
+                                    Text="{Binding Selected.Remaining}" />
+                            </Grid>
+                            <Grid>
+                                <TextBlock Style="{DynamicResource FieldLabel}" Text="续期凭证到期" />
+                                <TextBlock
+                                    HorizontalAlignment="Right"
+                                    Style="{DynamicResource FieldValueMono}"
+                                    Text="{Binding Selected.RefreshExpiresAt}" />
+                            </Grid>
+
+                            <!-- 冷却说明 -->
+                            <TextBlock
+                                Margin="0,10,0,0"
+                                Text="{Binding Selected.CooldownText}"
+                                TextWrapping="Wrap"
+                                Visibility="{Binding Selected.HasCooldowns, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock.Style>
+                                    <Style BasedOn="{StaticResource TextSmall}" TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Selected.CooldownsAreLong}" Value="True">
+                                                <Setter Property="Foreground" Value="{DynamicResource WarnBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+
+                            <!-- 最近到期的积分包 -->
+                            <ItemsControl
+                                Margin="0,12,0,0"
+                                ItemsSource="{Binding Selected.TopCreditPackages}"
+                                Visibility="{Binding Selected.HasCredits, Converter={StaticResource BoolToVisibility}}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,0,0,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock
+                                                Grid.Column="0"
+                                                VerticalAlignment="Center"
+                                                Text="{Binding Amount}">
+                                                <TextBlock.Style>
+                                                    <Style BasedOn="{StaticResource TextNumber}" TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsExpiring}" Value="True">
+                                                                <Setter Property="Foreground" Value="{DynamicResource WarnBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock
+                                                Grid.Column="1"
+                                                Margin="8,0,8,0"
+                                                VerticalAlignment="Center"
+                                                Style="{DynamicResource TextSmall}"
+                                                Foreground="{DynamicResource TextTertiaryBrush}"
+                                                Text="{Binding Name}"
+                                                TextTrimming="CharacterEllipsis" />
+                                            <TextBlock
+                                                Grid.Column="2"
+                                                VerticalAlignment="Center"
+                                                Text="{Binding ExpiryText}">
+                                                <TextBlock.Style>
+                                                    <Style BasedOn="{StaticResource TextSmall}" TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsExpiring}" Value="True">
+                                                                <Setter Property="Foreground" Value="{DynamicResource WarnBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <TextBlock
+                                Margin="0,4,0,0"
+                                Style="{DynamicResource TextMicro}"
+                                Foreground="{DynamicResource TextTertiaryBrush}"
+                                Text="{Binding Selected.MoreCreditText}"
+                                Visibility="{Binding Selected.MoreCreditText, Converter={StaticResource StringToVisibility}}" />
+
+                            <!-- 积分消耗 -->
+                            <StackPanel
+                                Margin="0,16,0,0"
+                                Visibility="{Binding HasSelectedUsage, Converter={StaticResource BoolToVisibility}}">
+                                <Rectangle
+                                    Height="1"
+                                    Margin="0,0,0,14"
+                                    Fill="{DynamicResource HairlineBrush}" />
+                                <Grid>
+                                    <TextBlock Style="{DynamicResource FieldLabel}" Text="积分消耗" />
+                                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                                        <TextBlock
+                                            VerticalAlignment="Bottom"
+                                            Style="{DynamicResource TextNumberStrong}"
+                                            Foreground="{DynamicResource WarnBrush}"
+                                            Text="{Binding SelectedCreditSpent}" />
+                                        <TextBlock
+                                            Margin="8,0,0,1"
+                                            VerticalAlignment="Bottom"
+                                            Style="{DynamicResource TextMicro}"
+                                            Foreground="{DynamicResource TextTertiaryBrush}"
+                                            Text="{Binding SelectedUsageSummary}" />
+                                    </StackPanel>
+                                </Grid>
+                                <ItemsControl Margin="0,8,0,0" ItemsSource="{Binding SelectedUsage}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,3,0,3">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="56" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock
+                                                    Grid.Column="0"
+                                                    Style="{DynamicResource TextMicro}"
+                                                    Foreground="{DynamicResource TextTertiaryBrush}"
+                                                    Text="{Binding Time}" />
+                                                <TextBlock
+                                                    Grid.Column="1"
+                                                    Margin="6,0,6,0"
+                                                    Style="{DynamicResource TextSmall}"
+                                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                                    Text="{Binding Model}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                                <TextBlock
+                                                    Grid.Column="2"
+                                                    Style="{DynamicResource TextSmall}"
+                                                    Foreground="{DynamicResource TextTertiaryBrush}"
+                                                    Text="{Binding Credit}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+
+                            <!-- 操作按钮 -->
+                            <Rectangle
+                                Height="1"
+                                Margin="0,16,0,14"
+                                Fill="{DynamicResource HairlineBrush}" />
+
+                            <ui:Button
+                                Margin="0,0,0,8"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Appearance="Secondary"
+                                Command="{Binding ActivateCommand}"
+                                Content="切换到这个号" />
+                            <ui:Button
+                                Margin="0,0,0,8"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Appearance="Secondary"
+                                Command="{Binding RefreshTokenCommand}"
+                                Content="续期 token" />
+                            <ui:Button
+                                Margin="0,0,0,8"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Appearance="Transparent"
+                                Command="{Binding RenameCommand}"
+                                Content="改名" />
+                            <ui:Button
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Appearance="Danger"
+                                Command="{Binding RemoveCommand}"
+                                Content="删除这个号" />
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

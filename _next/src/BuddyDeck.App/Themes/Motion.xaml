@@ -1,0 +1,46 @@
+<!--
+  Motion.xaml —— 动效时长。
+
+  ## 这个界面几乎不动
+
+  SKILL.md 第 32 行：**非用户触发的动效要节制**，一个编排好的时刻胜过一堆散落的
+  效果；「每块内容 fade-and-slide-up 入场 + 每张卡片都有 hover 过渡」是通用默认，
+  一眼就是 AI 生成的。
+
+  所以这里的规则是：
+
+  · **只有一个**非用户触发的动效：`MotionEnter`，整页首帧出现，且**只做透明度**。
+    不做位移动画 —— 数据面板里元素从下方滑进来，会让人误以为内容还在加载。
+  · 其余全部是**动作的回应**：悬停、按下、展开。用户做了事，界面回答他。
+  · 悬停和聚焦用 `MotionInstant`（0ms）—— 鼠标扫过一行底色就立刻变，
+    120ms 的过渡在快速扫列表时反而像卡顿。
+
+  ## 冷却倒计时的节奏
+
+  `MotionCooldownMs` 不是动画时长，是**心跳间隔**：冷却态的剩余时间
+  每秒刷新一次。再快没有信息量（显示的是分钟），再慢用户会觉得界面死了。
+
+  用 `Duration` 的地方不要写 `"0:0:0.12"` 字面量，引这里的 key。
+
+  详见 docs/ui-design-plan.md 第 1.6 节。
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+
+  <!-- 0ms 悬停、聚焦。直接切，不加过渡。 -->
+  <Duration x:Key="MotionInstant">0:0:0</Duration>
+
+  <!-- 120ms 按下 / 抬起的底色反馈。够快，不挡手。 -->
+  <Duration x:Key="MotionFeedback">0:0:0.12</Duration>
+
+  <!-- 180ms 展开详情、用量条宽度变化。要看得出「变了多少」才需要这个时长。 -->
+  <Duration x:Key="MotionExpand">0:0:0.18</Duration>
+
+  <!-- 220ms 唯一的入场：内容首帧淡入。只做透明度。 -->
+  <Duration x:Key="MotionEnter">0:0:0.22</Duration>
+
+  <!-- 冷却倒计时的心跳间隔（毫秒）。不是动画时长。 -->
+  <sys:Int32 x:Key="MotionCooldownMs">1000</sys:Int32>
+
+</ResourceDictionary>

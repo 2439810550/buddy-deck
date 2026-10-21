@@ -1,0 +1,229 @@
+<UserControl
+    x:Class="BuddyDeck.App.Controls.AccountDetailView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:bd="clr-namespace:BuddyDeck.App.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    d:DesignHeight="700"
+    d:DesignWidth="340"
+    mc:Ignorable="d">
+
+    <!--
+        账号详情表单：封装账号的全部详细信息。
+        DataContext = AccountRowViewModel（选中账号）。
+        主程序（VaultPage）引用它，省掉一长串字段绑定。
+    -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+            <!-- 头部 -->
+            <StackPanel Orientation="Horizontal">
+                <TextBlock
+                    VerticalAlignment="Center"
+                    Style="{DynamicResource TextSectionTitle}"
+                    Foreground="{DynamicResource TextPrimaryBrush}"
+                    Text="{Binding DisplayName}"
+                    TextTrimming="CharacterEllipsis" />
+                <bd:AccountStateBadge
+                    Margin="10,0,0,0"
+                    VerticalAlignment="Center"
+                    State="{Binding State}" />
+            </StackPanel>
+
+            <Rectangle
+                Height="1"
+                Margin="0,10,0,14"
+                Fill="{DynamicResource HairlineBrush}" />
+
+            <!-- 余额 -->
+            <TextBlock
+                Style="{DynamicResource TextMicro}"
+                Foreground="{DynamicResource TextTertiaryBrush}"
+                Text="剩余积分" />
+            <TextBlock
+                Margin="0,4,0,0"
+                Style="{DynamicResource TextNumberStrong}"
+                Foreground="{DynamicResource TextPrimaryBrush}"
+                Text="{Binding CreditTotal}"
+                Visibility="{Binding HasCredits, Converter={StaticResource BoolToVisibility}}" />
+            <TextBlock
+                Margin="0,4,0,0"
+                Style="{DynamicResource TextSmall}"
+                Foreground="{DynamicResource TextTertiaryBrush}"
+                Text="{Binding CreditPackageCountText}" />
+            <TextBlock
+                Margin="0,2,0,0"
+                Style="{DynamicResource TextMicro}"
+                Foreground="{DynamicResource TextTertiaryBrush}"
+                Text="{Binding CreditUpdatedText}" />
+
+            <Rectangle
+                Height="1"
+                Margin="0,14,0,14"
+                Fill="{DynamicResource HairlineBrush}" />
+
+            <!-- 基本信息 -->
+            <Grid Margin="0,0,0,9">
+                <TextBlock Style="{DynamicResource FieldLabel}" Text="uid" />
+                <TextBlock
+                    HorizontalAlignment="Right"
+                    Style="{DynamicResource FieldValueMono}"
+                    Text="{Binding UidShort}" />
+            </Grid>
+            <Grid Margin="0,0,0,9">
+                <TextBlock Style="{DynamicResource FieldLabel}" Text="类型" />
+                <TextBlock
+                    HorizontalAlignment="Right"
+                    Style="{DynamicResource FieldValue}"
+                    Text="{Binding Tenant}" />
+            </Grid>
+            <Grid Margin="0,0,0,9">
+                <TextBlock Style="{DynamicResource FieldLabel}" Text="登录域" />
+                <TextBlock
+                    HorizontalAlignment="Right"
+                    Style="{DynamicResource FieldValueMono}"
+                    Text="{Binding Domain}" />
+            </Grid>
+            <Grid Margin="0,0,0,9">
+                <TextBlock Style="{DynamicResource FieldLabel}" Text="Token 到期" />
+                <TextBlock
+                    HorizontalAlignment="Right"
+                    Style="{DynamicResource FieldValueMono}"
+                    Text="{Binding ExpiresAt}" />
+            </Grid>
+            <Grid Margin="0,0,0,9">
+                <TextBlock Style="{DynamicResource FieldLabel}" Text="还剩" />
+                <TextBlock
+                    HorizontalAlignment="Right"
+                    Style="{DynamicResource FieldValue}"
+                    Text="{Binding Remaining}" />
+            </Grid>
+            <Grid Margin="0,0,0,9">
+                <TextBlock Style="{DynamicResource FieldLabel}" Text="续期凭证到期" />
+                <TextBlock
+                    HorizontalAlignment="Right"
+                    Style="{DynamicResource FieldValueMono}"
+                    Text="{Binding RefreshExpiresAt}" />
+            </Grid>
+
+            <!-- 冷却：归纳 + 明细 -->
+            <TextBlock
+                Margin="0,10,0,0"
+                Text="{Binding CooldownText}"
+                TextWrapping="Wrap"
+                Visibility="{Binding HasCooldowns, Converter={StaticResource BoolToVisibility}}">
+                <TextBlock.Style>
+                    <Style BasedOn="{StaticResource TextSmall}" TargetType="TextBlock">
+                        <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding CooldownsAreLong}" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource WarnBrush}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+            <ItemsControl
+                Margin="0,8,0,0"
+                ItemsSource="{Binding CooldownDetails}"
+                Visibility="{Binding HasCooldowns, Converter={StaticResource BoolToVisibility}}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Margin="0,3,0,3">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock
+                                Grid.Column="0"
+                                Style="{DynamicResource TextSmall}"
+                                Foreground="{DynamicResource TextSecondaryBrush}"
+                                Text="{Binding Model}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                Grid.Column="1"
+                                Margin="8,0,0,0"
+                                Text="{Binding RemainText}">
+                                <TextBlock.Style>
+                                    <Style BasedOn="{StaticResource TextSmall}" TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsLong}" Value="True">
+                                                <Setter Property="Foreground" Value="{DynamicResource WarnBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <!-- 最近到期的积分包 -->
+            <ItemsControl
+                Margin="0,12,0,0"
+                ItemsSource="{Binding TopCreditPackages}"
+                Visibility="{Binding HasCredits, Converter={StaticResource BoolToVisibility}}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock
+                                Grid.Column="0"
+                                VerticalAlignment="Center"
+                                Text="{Binding Amount}">
+                                <TextBlock.Style>
+                                    <Style BasedOn="{StaticResource TextNumber}" TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsExpiring}" Value="True">
+                                                <Setter Property="Foreground" Value="{DynamicResource WarnBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock
+                                Grid.Column="1"
+                                Margin="8,0,8,0"
+                                VerticalAlignment="Center"
+                                Style="{DynamicResource TextSmall}"
+                                Foreground="{DynamicResource TextTertiaryBrush}"
+                                Text="{Binding Name}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                Grid.Column="2"
+                                VerticalAlignment="Center"
+                                Text="{Binding ExpiryText}">
+                                <TextBlock.Style>
+                                    <Style BasedOn="{StaticResource TextSmall}" TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsExpiring}" Value="True">
+                                                <Setter Property="Foreground" Value="{DynamicResource WarnBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <TextBlock
+                Margin="0,4,0,0"
+                Style="{DynamicResource TextMicro}"
+                Foreground="{DynamicResource TextTertiaryBrush}"
+                Text="{Binding MoreCreditText}"
+                Visibility="{Binding MoreCreditText, Converter={StaticResource StringToVisibility}}" />
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

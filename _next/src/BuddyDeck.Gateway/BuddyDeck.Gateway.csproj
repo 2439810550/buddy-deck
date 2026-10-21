@@ -12,4 +12,20 @@
   <ItemGroup>
     <ProjectReference Include="../BuddyDeck.Core/BuddyDeck.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!--
+      协议翻译层里有一批 `internal static` 的纯函数（TranslateRequest /
+      TranslateResponse / StripClientFingerprint / EstimateTokens / ToAnthropicStopReason），
+      它们不该对外暴露（网关的公开面只有 HTTP 端点），但**必须能被单测直接验**。
+
+      为什么不用「把它们改成 public」：
+      那会把内部实现细节变成对外契约 —— 以后改签名就是破坏性变更，
+      而它们本来只是翻译逻辑的分解，不是网关对外的能力。
+
+      所以用 InternalsVisibleTo 打开一条只给测试的通道。
+      注意：断言里不能依赖「这些方法的签名永不改变」—— 那是内部细节，
+      允许重构。真正需要稳定的是 HTTP 契约，那些由 E2E 测试覆盖。
+    -->
+    <InternalsVisibleTo Include="BuddyDeck.Gateway.Tests" />
+  </ItemGroup>
 </Project>

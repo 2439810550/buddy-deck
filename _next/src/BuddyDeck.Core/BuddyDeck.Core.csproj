@@ -4,8 +4,21 @@
     <AssemblyName>BuddyDeck.Core</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.10" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.2" />
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <!--
+      SQLite —— 本机数据库。
+
+      为什么是 SQLite 而不是别的：
+        · 零服务器 —— 一个文件，本机工具不需要再维护一个数据库进程
+        · 单文件备份 —— 和保险库同目录，用户备份时一起带走
+        · 查询快 —— 界面按账号/时间/模型聚合积分消耗，秒回（现在批量
+          查 20 个账号的积分要几十秒，就是因为每次现查上游）
+
+      包选 Microsoft.Data.Sqlite（官方、轻量、长期支持）。
+    -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
   </ItemGroup>
 </Project>

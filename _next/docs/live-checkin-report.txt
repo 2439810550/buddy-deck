@@ -1,0 +1,83 @@
+======================================================================
+真机验证：M11 签到 + M18 计费/促销解析
+======================================================================
+
+【0】环境确认
+  保险库：C:\Users\DK\.workbuddy-api\accounts.cn.json
+    [实测] 读到 19 个账号
+
+【0b】网关侧签到路由对照
+    [环境] 网关 http://127.0.0.1:8795 连不上（URLError: <urlopen error [WinError 10061] 由于目标计算机积极拒绝，无法连接。>）—— 未接线或未启动，不影响上游验证
+
+【1】M18 计费/促销解析（真实 /v3/config）
+
+    ── UA 必要性对照（真机实测）──
+    [实测] /v3/config 不带 User-Agent → HTTP 400：{"code":12403,"msg":"check ua, get coding copilot version error","requestId":"48e48e3d-757a-440d-9e25-2ea37239cebe"}
+    [实测] /v3/config 带  User-Agent → HTTP 200：{"code":0,"msg":"OK","requestId":"e4baf6d3-dba5-4406-9957-c9c67e342900","data":{"agents":[{"commands":["init","summarize
+    [推断] 上游按 UA 判断客户端身份（M20 的领域）—— **/v3/config 缺 UA 会被拒**，与凭证/账号状态无关
+    [实测] 签到端点不带 User-Agent → HTTP 200（与带 UA 相同 ⇒ 签到**不校验 UA**）
+    [实测] GET /v3/config → HTTP 200（ok：HTTP 200 + code 0）
+    [实测] 目录含 37 个模型行
+    [实测] 带 credits 的行：0；带 tags 的行：2；modelPromotions：无
+
+    ── credits 字段的原始形态（前 8 个非空）──
+    [实测]   没有任何行带 credits 字段
+
+    ── badge: 标签（M18 的徽标来源）──
+    [实测]   hy3                          ['badge:限时折扣:#FF0000']
+    [实测]   modelPromotions 为空或不存在 —— 本账号当前无促销
+
+【2】M11 签到状态（checkin-activity-status）
+    [实测] [主号] HTTP 200 原文（截断 400 字）：{"code":0,"msg":"OK","requestId":"f3d3951a-1dfc-4315-94f2-9c3cfc59a5fe","data":{"active":true,"today_checked_in":true,"streak_days":8,"daily_credit":100,"today_credit":100,"is_streak_day":false,"next_streak_day":0,"streak_bonus_days":0,"streak_bonus_credit":0,"checkin_dates":["2026-10-07","2026-10-06","2026-10-05","2026-10-04","2026-10-03","2026-10-02","2026-10-01","2026-09-30"],"week_checkin_days
+    [实测] [少钦号] HTTP 200 原文（截断 400 字）：{"code":0,"msg":"OK","requestId":"44b7b091-4287-4340-8f10-8784195e3b8a","data":{"active":true,"today_checked_in":true,"streak_days":8,"daily_credit":100,"today_credit":100,"is_streak_day":false,"next_streak_day":0,"streak_bonus_days":0,"streak_bonus_credit":0,"checkin_dates":["2026-10-07","2026-10-06","2026-10-05","2026-10-04","2026-10-03","2026-10-02","2026-10-01","2026-09-30"],"week_checkin_days
+    [实测] 签到状态：3/3 个账号返回 HTTP 200
+    [推断] 所有出现的字段类型均与 CheckinStatus.FromData 的期望一致
+    [实测] 上游还发 `next_streak_day`（int）：0
+    [实测] 上游还发 `action_button`（dict）：{'show': True, 'text': '体验Buddy应用', 'action': 'workbuddy://home?openBuddySwitcher=true'}
+    [实测] ⚠ **CheckinStatus 没有这两个字段** —— 它们会被 Checkin 静默忽略（无害，但界面拿不到）
+
+【3】M11 重复签到分支（今日已签）
+    [实测] [对该账号执行 daily-checkin] HTTP 400（already_claimed）：{"code":10001,"msg":"今天已签到，请明天再来","requestId":"fabf8e71-ebdf-4f4a-9850-f1b9660875f7"}
+    [实测] ★ **这就是「今日已签」分支的真实形态**：HTTP 400 + code 10001，msg 为「今天已签到，请明天再来」
+    [实测] → 上游**不会**对重复签到回 code 0，而是回一个明确的业务错误码
+    [实测] → Checkin.PostOutcome 会把它归为 Failed / BadRequest，**不是 AlreadyClaimed**（见 CheckinTests.真机_重复签到时_上游回_400_code_10001 那条回归测试）
+    [实测] → 但 EnsureCheckedInAsync 会**先查 status**：today_checked_in=True、active=True
+    [推断] → status 已说今天签过，因此路径②短路、**不会**发出 daily-checkin，调用方拿到 AlreadyClaimed。真机上该分支的幂等成立
+
+======================================================================
+证据清单（按等级）
+======================================================================
+
+[实测] 21 条
+  · 读到 19 个账号
+  · /v3/config 不带 User-Agent → HTTP 400：{"code":12403,"msg":"check ua, get coding copilot version error","requestId":"48e48e3d-757a-440d-9e25-2ea37239cebe"}
+  · /v3/config 带  User-Agent → HTTP 200：{"code":0,"msg":"OK","requestId":"e4baf6d3-dba5-4406-9957-c9c67e342900","data":{"agents":[{"commands":["init","summarize
+  · 签到端点不带 User-Agent → HTTP 200（与带 UA 相同 ⇒ 签到**不校验 UA**）
+  · GET /v3/config → HTTP 200（ok：HTTP 200 + code 0）
+  · 目录含 37 个模型行
+  · 带 credits 的行：0；带 tags 的行：2；modelPromotions：无
+  ·   没有任何行带 credits 字段
+  ·   hy3                          ['badge:限时折扣:#FF0000']
+  ·   modelPromotions 为空或不存在 —— 本账号当前无促销
+  · [主号] HTTP 200 原文（截断 400 字）：{"code":0,"msg":"OK","requestId":"f3d3951a-1dfc-4315-94f2-9c3cfc59a5fe","data":{"active":true,"today_checked_in":true,"streak_days":8,"daily_credit":100,"today_credit":100,"is_streak_day":false,"next_streak_day":0,"streak_bonus_days":0,"streak_bonus_credit":0,"checkin_dates":["2026-10-07","2026-10-06","2026-10-05","2026-10-04","2026-10-03","2026-10-02","2026-10-01","2026-09-30"],"week_checkin_days
+  · [少钦号] HTTP 200 原文（截断 400 字）：{"code":0,"msg":"OK","requestId":"44b7b091-4287-4340-8f10-8784195e3b8a","data":{"active":true,"today_checked_in":true,"streak_days":8,"daily_credit":100,"today_credit":100,"is_streak_day":false,"next_streak_day":0,"streak_bonus_days":0,"streak_bonus_credit":0,"checkin_dates":["2026-10-07","2026-10-06","2026-10-05","2026-10-04","2026-10-03","2026-10-02","2026-10-01","2026-09-30"],"week_checkin_days
+  · 签到状态：3/3 个账号返回 HTTP 200
+  · 上游还发 `next_streak_day`（int）：0
+  · 上游还发 `action_button`（dict）：{'show': True, 'text': '体验Buddy应用', 'action': 'workbuddy://home?openBuddySwitcher=true'}
+  · ⚠ **CheckinStatus 没有这两个字段** —— 它们会被 Checkin 静默忽略（无害，但界面拿不到）
+  · [对该账号执行 daily-checkin] HTTP 400（already_claimed）：{"code":10001,"msg":"今天已签到，请明天再来","requestId":"fabf8e71-ebdf-4f4a-9850-f1b9660875f7"}
+  · ★ **这就是「今日已签」分支的真实形态**：HTTP 400 + code 10001，msg 为「今天已签到，请明天再来」
+  · → 上游**不会**对重复签到回 code 0，而是回一个明确的业务错误码
+  · → Checkin.PostOutcome 会把它归为 Failed / BadRequest，**不是 AlreadyClaimed**（见 CheckinTests.真机_重复签到时_上游回_400_code_10001 那条回归测试）
+  · → 但 EnsureCheckedInAsync 会**先查 status**：today_checked_in=True、active=True
+
+[推断] 3 条
+  · 上游按 UA 判断客户端身份（M20 的领域）—— **/v3/config 缺 UA 会被拒**，与凭证/账号状态无关
+  · 所有出现的字段类型均与 CheckinStatus.FromData 的期望一致
+  · → status 已说今天签过，因此路径②短路、**不会**发出 daily-checkin，调用方拿到 AlreadyClaimed。真机上该分支的幂等成立
+
+[环境] 1 条
+  · 网关 http://127.0.0.1:8795 连不上（URLError: <urlopen error [WinError 10061] 由于目标计算机积极拒绝，无法连接。>）—— 未接线或未启动，不影响上游验证
+
+======================================================================
+合计：实测 21 / 推断 3 / 环境 1

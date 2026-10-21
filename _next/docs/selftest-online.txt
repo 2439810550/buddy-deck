@@ -1,0 +1,21 @@
+﻿IGatewayClient 实现 = HttpGatewayClient
+端口 = 8790
+
+GetHealthAsync -> Online=True Port=8790 Error=
+GetAccountsAsync -> Ok=False Error=网关回了 401
+GetMetricsAsync -> Ok=False Error=网关回了 401
+GetPoolsAsync -> Ok=False Error=网关回了 401
+GetModelsAsync -> Ok=False Error=网关回了 401
+ReadLogAsync -> Ok=False Error=网关回了 401
+GetSettingsAsync -> Ok=False Error=网关回了 401
+
+ChatStreamAsync -> 收到 1 段文本
+
+DashboardViewModel: Online=True OfflineReason="" AccountCount=0 ConnectionHeadline="网关已连接"
+AccountsViewModel: Rows=0 IsEmpty=True Notice="网关回了 401"
+PoolsViewModel: Pools=0 IsEmpty=True Notice="网关回了 401"
+ChatViewModel: Models=0 ModelsNotice="网关回了 401"
+SettingsViewModel: Notice="网关回了 401" Port=8787
+LogsViewModel: Lines=0 Notice="网关回了 401"
+
+结论：所有调用都返回了结果，没有抛出异常。

@@ -309,4 +309,22 @@ public class AccountPoolTests
         Assert.Single(snapshot);           // 老快照不变
         Assert.Equal(2, pool.Members.Count);  // 重新拿是新的
     }
+
+    [Fact]
+    public void 替换时_同_id_用新凭证()
+    {
+        // ★ 用户重新登录/导入后 token 变了。Replace 复用旧 PoolMember 对象时
+        //   必须用**新的 Entry**（含新 token），否则调上游还是旧 token → 401。
+        //   这是「重新登录了还是失败」的根因：池里存的凭证没跟着保险库走。
+        var (pool, _) = Make(Entry("a", label: "旧名"));
+
+        var renewed = Entry("a", label: "新名");
+        renewed = renewed with { AccessToken = "tok-新", ExpiresAtMs = 9_000_000_000_000 };
+        pool.Replace([renewed]);
+
+        var m = pool.Members.Single();
+        Assert.Equal("新名", m.Label);
+        Assert.Equal("tok-新", m.Entry.AccessToken);
+        Assert.Equal(9_000_000_000_000, m.Entry.ExpiresAtMs);
+    }
 }

@@ -1,0 +1,182 @@
+<!--
+  Typography.xaml —— 字号、字重、字体族，以及成套的 TextBlock 样式。
+
+  ## 两条字，不引入第三条
+
+  · FontUi      界面文本（Segoe UI Variable Text，Win11 自带，回退 Segoe UI）
+  · FontNumeric 数字（Cascadia Mono，回退 Consolas）
+
+  字体文件不打包 —— 少一个分发负担，而且这两个家族在 Win10/11 上必然存在。
+
+  ## 为什么数字要等宽
+
+  一列用量数字刷新时会跳宽度：9 → 10 整行右移一格，10 → 9 又移回来。
+  等宽让数字**站住不动**，扫一列的时候眼睛不用重新定位。
+
+  这是功能需要，不是「等宽显得极客」。所以等宽**只用在真数字上**
+  （用量、端口、buildId、耗时、计数），不用来做标签或 eyebrow
+  —— 那是 AI 生成界面的识别特征之一（SKILL.md 第 43 行）。
+
+  ## 大小写
+
+  界面文本一律**句子大小写**。全大写 + 字间距（tracked-out ALL-CAPS）
+  是模板化界面的识别特征，全站不用。
+  buildId 这种本身就是标识符的照抄原样。
+
+  ## ⚠ 资源引用规则（改这个文件前必读）
+
+  Setter 的 Value 一律用 **DynamicResource**，不用 StaticResource。
+  原因：这本字典会被 App.xaml 与 Colors.xaml 一起 merge，而
+  StaticResource 在**解析期**只查当前字典，查不到合并进来的兄弟字典 ——
+  会抛 XamlParseException（这个坑是 ThemeResourceTests 抓出来的，
+  见测试里的「五本字典都能被WPF解析」）。
+
+  唯一的例外是 BasedOn：它不是 DependencyProperty，
+  **只能 StaticResource**，而且引用的样式必须在本文件内定义。
+  这就是为什么 ListRowTitle / ListRowMeta / FieldLabel / FieldValue
+  这些「复合样式」住在本文件，而不是摆在 Controls.xaml 里。
+
+  详见 docs/ui-design-plan.md 第 4.1 节。
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+
+  <!-- ============ 字体族 ============ -->
+  <!-- 逗号分隔的列表就是 WPF 的字体回退链：第一个不存在就试下一个。 -->
+  <FontFamily x:Key="FontUi">Segoe UI Variable Text, Segoe UI</FontFamily>
+  <FontFamily x:Key="FontNumeric">Cascadia Mono, Consolas, Segoe UI</FontFamily>
+
+  <!-- ============ 字号刻度 ============ -->
+  <!-- 11 表头、单位、徽章里的小字。「微」不代表可以再小 —— 11 是深色底上的可读下限。 -->
+  <sys:Double x:Key="FontSizeMicro">11</sys:Double>
+  <!-- 12 次要说明、时间戳、列表行的第二行 -->
+  <sys:Double x:Key="FontSizeSmall">12</sys:Double>
+  <!-- 13 列表行主文字、正文。整个界面的主力字号。 -->
+  <sys:Double x:Key="FontSizeBody">13</sys:Double>
+  <!-- 14 区块标题（「账号」「最近请求」） -->
+  <sys:Double x:Key="FontSizeSection">14</sys:Double>
+  <!-- 20 页标题。只出现在每页顶部那一个，不重复出现在区块里。 -->
+  <sys:Double x:Key="FontSizeTitle">20</sys:Double>
+  <!-- 状态徽章里的词。11.5 是为了让中文在两字/三字之间宽度更稳。 -->
+  <sys:Double x:Key="FontSizeBadge">11.5</sys:Double>
+
+  <!-- ============ 字重 ============ -->
+  <!-- 只有两个。Bold 不用 —— 深色底上的 Bold 会糊，SemiBold 已经够了。 -->
+  <FontWeight x:Key="FontWeightNormal">Normal</FontWeight>
+  <FontWeight x:Key="FontWeightEmphasis">SemiBold</FontWeight>
+
+  <!-- ============ 行高 ============ -->
+  <!-- 深色底 + 小字号需要比默认稍宽的行距，否则多行说明会挤成一坨。 -->
+  <sys:Double x:Key="LineHeightBody">19</sys:Double>
+  <sys:Double x:Key="LineHeightSmall">17</sys:Double>
+
+  <!--
+    ============ 基础样式 ============
+    用 Style="{StaticResource TextBody}" 这种直接引，
+    不要自己拼 FontSize/FontWeight —— 拼出来的东西三周后没人知道
+    为什么有一处是 12.5。
+  -->
+
+  <!-- 页标题。每页一个，页面顶部。 -->
+  <Style x:Key="TextPageTitle" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeTitle}" />
+    <Setter Property="FontWeight" Value="{DynamicResource FontWeightEmphasis}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    <Setter Property="TextWrapping" Value="NoWrap" />
+  </Style>
+
+  <!-- 区块标题。它自己就是标题，上方**不加** eyebrow 标签。 -->
+  <Style x:Key="TextSectionTitle" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeSection}" />
+    <Setter Property="FontWeight" Value="{DynamicResource FontWeightEmphasis}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    <Setter Property="TextWrapping" Value="NoWrap" />
+  </Style>
+
+  <!-- 正文 / 列表行主文字 -->
+  <Style x:Key="TextBody" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    <Setter Property="LineHeight" Value="{DynamicResource LineHeightBody}" />
+    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+  </Style>
+
+  <!-- 小字：说明、时间戳、列表行的第二行 -->
+  <Style x:Key="TextSmall" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    <Setter Property="LineHeight" Value="{DynamicResource LineHeightSmall}" />
+    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+  </Style>
+
+  <!-- 微标签：表头、单位。**不做全大写**，就是句子大小写的小字。 -->
+  <Style x:Key="TextMicro" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeMicro}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+  </Style>
+
+  <!-- 等宽数字。真数字用这个。 -->
+  <Style x:Key="TextNumber" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="{DynamicResource FontNumeric}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+  </Style>
+
+  <!-- 等宽数字 + 强调。用在「还剩 4 小时」这种要一眼看到的量上。 -->
+  <Style x:Key="TextNumberStrong" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="{DynamicResource FontNumeric}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="FontWeight" Value="{DynamicResource FontWeightEmphasis}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+  </Style>
+
+  <!-- 长文本块（错误说明、空态说明）：要换行，不要省略号。 -->
+  <Style x:Key="TextParagraph" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    <Setter Property="LineHeight" Value="{DynamicResource LineHeightBody}" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+
+  <!--
+    ============ 复合样式（BasedOn 基础样式） ============
+    这些必须住在本文件里：BasedOn 只吃 StaticResource，
+    引用的目标必须同字典。以前它们错放在 Controls.xaml，
+    结果加载时抛 XamlParseException —— 是 ThemeResourceTests 抓出来的。
+  -->
+
+  <!-- 列表行的主文字：正文 + 强调。 -->
+  <Style x:Key="ListRowTitle" TargetType="TextBlock" BasedOn="{StaticResource TextBody}">
+    <Setter Property="FontWeight" Value="{DynamicResource FontWeightEmphasis}" />
+  </Style>
+
+  <!-- 行的第二行（属性、剩余时间） -->
+  <Style x:Key="ListRowMeta" TargetType="TextBlock" BasedOn="{StaticResource TextSmall}" />
+
+  <!-- 「标签 / 值」两列里的标签。 -->
+  <Style x:Key="FieldLabel" TargetType="TextBlock" BasedOn="{StaticResource TextSmall}">
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!-- 「标签 / 值」两列里的值。 -->
+  <Style x:Key="FieldValue" TargetType="TextBlock" BasedOn="{StaticResource TextBody}">
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+    <Setter Property="TextTrimming" Value="None" />
+  </Style>
+
+  <!-- 详情页里展示 buildId / 路径这种「原样标识符」的值。用等宽。 -->
+  <Style x:Key="FieldValueMono" TargetType="TextBlock" BasedOn="{StaticResource TextNumber}">
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+
+</ResourceDictionary>

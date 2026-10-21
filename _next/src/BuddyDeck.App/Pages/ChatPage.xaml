@@ -1,0 +1,348 @@
+<UserControl
+    x:Class="BuddyDeck.App.Pages.ChatPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:bd="clr-namespace:BuddyDeck.App.Controls"
+    xmlns:svc="clr-namespace:BuddyDeck.App.Services"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    d:DesignHeight="700"
+    d:DesignWidth="1000"
+    mc:Ignorable="d">
+
+    <!--
+        聊天测试页。
+        它不是聊天客户端 —— 它是「网关通不通」的探针。
+        所以重点在模型名、耗时、失败原因，界面上不搞气泡和头像。
+    -->
+    <Grid Margin="{StaticResource SpacePage}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 页头 -->
+        <Grid Grid.Row="0" Margin="0,0,0,20">
+            <StackPanel>
+                <TextBlock
+                    Style="{DynamicResource TextPageTitle}"
+                    Foreground="{DynamicResource TextPrimaryBrush}"
+                    Text="聊天测试" />
+                <TextBlock
+                    Margin="0,5,0,0"
+                    Style="{DynamicResource TextSmall}"
+                    Foreground="{DynamicResource TextSecondaryBrush}"
+                    Text="发一句话，看网关到底通不通" />
+            </StackPanel>
+            <ui:Button
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Appearance="Secondary"
+                Command="{Binding LoadModelsCommand}"
+                Content="读取模型列表"
+                Icon="{ui:SymbolIcon Symbol=ArrowSync24}" />
+        </Grid>
+
+        <!-- 模型 + 耗时 -->
+        <Grid Grid.Row="1" Margin="0,0,0,14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <!-- ⚠ 用 MaxWidth 而不是固定 Width：窗口缩窄时下拉框跟着缩，
+                     不把说明文字挤到看不见（响应式布局的实测反馈） -->
+                <ColumnDefinition Width="*" MaxWidth="320" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <TextBlock
+                Grid.Column="0"
+                Margin="0,0,10,0"
+                VerticalAlignment="Center"
+                Style="{DynamicResource FieldLabel}"
+                Text="模型" />
+            <ComboBox
+                Grid.Column="1"
+                VerticalAlignment="Center"
+                DisplayMemberPath="DisplayName"
+                ItemsSource="{Binding Models}"
+                SelectedItem="{Binding SelectedModel}" />
+
+            <TextBlock
+                Grid.Column="2"
+                Margin="16,0,0,0"
+                VerticalAlignment="Center"
+                Style="{DynamicResource TextSmall}"
+                Foreground="{DynamicResource TextTertiaryBrush}"
+                Text="{Binding ModelsNotice}"
+                TextTrimming="CharacterEllipsis" />
+
+            <TextBlock
+                Grid.Column="3"
+                VerticalAlignment="Center"
+                Style="{DynamicResource TextNumber}"
+                Foreground="{DynamicResource TextSecondaryBrush}"
+                Text="{Binding Elapsed}" />
+        </Grid>
+
+        <!-- 输入 + 输出 -->
+        <Grid Grid.Row="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="12" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Border
+                Grid.Row="0"
+                Padding="{StaticResource SpaceControl}"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource HairlineBrush}"
+                BorderThickness="{StaticResource BorderHairline}"
+                CornerRadius="{StaticResource RadiusPanel}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <ui:TextBox
+                        Grid.Row="0"
+                        MinHeight="64"
+                        AcceptsReturn="True"
+                        PlaceholderText="随便说一句，比如「用一句话说明什么是网关」"
+                        Text="{Binding Input, UpdateSourceTrigger=PropertyChanged}"
+                        TextWrapping="Wrap"
+                        VerticalScrollBarVisibility="Auto" />
+
+                    <ui:Button
+                        Grid.Row="1"
+                        Margin="0,10,0,0"
+                        HorizontalAlignment="Right"
+                        Appearance="Primary"
+                        Command="{Binding SendOrStopCommand}"
+                        Content="{Binding SendButtonText}"
+                        IsEnabled="{Binding CanSend}" />
+                </Grid>
+            </Border>
+
+            <Border
+                Grid.Row="2"
+                Padding="{StaticResource SpaceControl}"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource HairlineBrush}"
+                BorderThickness="{StaticResource BorderHairline}"
+                CornerRadius="{StaticResource RadiusPanel}">
+                <Grid>
+                    <bd:EmptyState
+                        Headline="还没有发出请求"
+                        Detail="上面选一个模型，写一句话，然后点发送。生图/生视频的结果会直接显示在下面。"
+                        Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}" />
+
+                    <!--
+                        内容块流。
+                        **不是一个 TextBlock** —— 消息由有序的文本块 / 图片块 / 视频块组成。
+                        文本支持流式追加，媒体块在识别到网关 URL 时插入。
+                        模板按类型自动匹配（DataType），不需要手写选择器。
+                    -->
+                    <ScrollViewer
+                        x:Name="BlockScroller"
+                        VerticalScrollBarVisibility="Auto"
+                        Visibility="{Binding IsEmpty, Converter={StaticResource InverseBoolToVisibility}}">
+                        <ItemsControl ItemsSource="{Binding Blocks}">
+                            <ItemsControl.Resources>
+
+                                <!-- ① 文本块 -->
+                                <DataTemplate DataType="{x:Type svc:TextBlock0}">
+                                    <TextBlock
+                                        Margin="0,0,0,8"
+                                        Text="{Binding Text}"
+                                        TextWrapping="Wrap">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+                                                <Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+                                                <Setter Property="LineHeight" Value="{DynamicResource LineHeightBody}" />
+                                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DataTemplate>
+
+                                <!--
+                                    ② 图片块
+                                    ⚠ 外框尺寸在三种状态（加载/成功/失败）下**完全一致**：
+                                    宽高都绑同一个 PlaceholderWidth/Height，换状态只换里面的内容。
+                                    这就是「布局不跳」的实现方式 —— 不是靠动画，是靠尺寸从一开始就定死。
+                                -->
+                                <DataTemplate DataType="{x:Type svc:ImageBlock}">
+                                    <Border
+                                        Width="{Binding PlaceholderWidth}"
+                                        Height="{Binding PlaceholderHeight}"
+                                        Margin="0,0,0,8"
+                                        HorizontalAlignment="Left"
+                                        Background="{DynamicResource RailSubtleBrush}"
+                                        BorderBrush="{DynamicResource HairlineBrush}"
+                                        BorderThickness="{StaticResource BorderHairline}"
+                                        CornerRadius="{StaticResource RadiusRow}"
+                                        ClipToBounds="True">
+                                        <Grid>
+                                            <ui:ProgressRing
+                                                Width="28"
+                                                Height="28"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center"
+                                                IsIndeterminate="True"
+                                                Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibility}}" />
+
+                                            <!--
+                                                成功：图 + 点击放大。
+
+                                                ⚠ 这里**不用 ui:Button 包图片**（试过，会溢出）：
+                                                WPF-UI 的 Button 模板内部有自己的内边距与
+                                                对齐逻辑，在 Grid 里会把内容撑出 Border。
+                                                改用「Image + 透明覆盖层处理点击」：
+                                                覆盖层只负责命中测试，不参与尺寸协商，
+                                                所以图片永远受 MaxWidth/MaxHeight 约束。
+
+                                                Image 也必须显式给 Max 尺寸 —— 它的默认行为是
+                                               按源像素要空间（516×384），Stretch=Uniform 只负责
+                                               在给定框里等比缩放，**不会主动把框变小**。
+                                            -->
+                                            <Image
+                                                Margin="2"
+                                                MaxWidth="{Binding PlaceholderWidth}"
+                                                MaxHeight="{Binding PlaceholderHeight}"
+                                                RenderOptions.BitmapScalingMode="HighQuality"
+                                                Source="{Binding Image}"
+                                                Stretch="Uniform"
+                                                Visibility="{Binding HasImage, Converter={StaticResource BoolToVisibility}}" />
+
+                                            <Button
+                                                Padding="0"
+                                                Background="#01000000"
+                                                BorderThickness="0"
+                                                Click="OnZoomImage"
+                                                Cursor="Hand"
+                                                Tag="{Binding}"
+                                                ToolTip="点开看大图"
+                                                Visibility="{Binding HasImage, Converter={StaticResource BoolToVisibility}}" />
+
+                                            <bd:ErrorState
+                                                Margin="12"
+                                                What="这个媒体显示不了"
+                                                Where="{Binding Error}"
+                                                Visibility="{Binding HasError, Converter={StaticResource BoolToVisibility}}" />
+
+                                            <Border
+                                                Margin="0,0,6,6"
+                                                Padding="5,1,5,1"
+                                                HorizontalAlignment="Right"
+                                                VerticalAlignment="Bottom"
+                                                Background="{DynamicResource InkBrush}"
+                                                CornerRadius="{StaticResource RadiusBar}"
+                                                Opacity="0.85">
+                                                <TextBlock
+                                                    FontSize="{DynamicResource FontSizeBadge}"
+                                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                                    Text="{Binding SizeText}" />
+                                            </Border>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+
+                                <!--
+                                    ③ 视频块：用 WPF 原生 MediaElement。
+
+                                    ⚠ MediaElement **没有内置播放条** —— 注释里曾经写
+                                    「自带播放/暂停/进度条」是错的。LoadedBehavior=Manual
+                                    时它连播放都不开始，用户看到的是一块黑。
+                                    所以这里补一个「播放」覆盖层：点击后由代码后置调 Play()。
+                                -->
+                                <DataTemplate DataType="{x:Type svc:VideoBlock}">
+                                    <Border
+                                        Width="{Binding PlaceholderWidth}"
+                                        Height="{Binding PlaceholderHeight}"
+                                        Margin="0,0,0,8"
+                                        HorizontalAlignment="Left"
+                                        Background="{DynamicResource RailSubtleBrush}"
+                                        BorderBrush="{DynamicResource HairlineBrush}"
+                                        BorderThickness="{StaticResource BorderHairline}"
+                                        CornerRadius="{StaticResource RadiusRow}">
+                                        <Grid>
+                                            <ui:ProgressRing
+                                                Width="28"
+                                                Height="28"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center"
+                                                IsIndeterminate="True"
+                                                Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibility}}" />
+
+                                            <MediaElement
+                                                x:Name="VideoPlayer"
+                                                Margin="2"
+                                                LoadedBehavior="Manual"
+                                                ScrubbingEnabled="True"
+                                                Source="{Binding LocalPath}"
+                                                Stretch="Uniform"
+                                                UnloadedBehavior="Close"
+                                                Visibility="{Binding IsReady, Converter={StaticResource BoolToVisibility}}" />
+
+                                            <!-- 播放覆盖层：点一下开始播，播起来就藏掉 -->
+                                            <Button
+                                                x:Name="PlayOverlay"
+                                                Width="56"
+                                                Height="56"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center"
+                                                Background="#CC000000"
+                                                BorderThickness="0"
+                                                Click="OnPlayVideo"
+                                                Cursor="Hand"
+                                                Tag="{Binding}">
+                                                <Button.Template>
+                                                    <ControlTemplate TargetType="Button">
+                                                        <Grid>
+                                                            <Ellipse Fill="{TemplateBinding Background}" />
+                                                            <Path
+                                                                Data="M 0,0 L 18,9 L 0,18 Z"
+                                                                Fill="White"
+                                                                HorizontalAlignment="Center"
+                                                                VerticalAlignment="Center" />
+                                                        </Grid>
+                                                    </ControlTemplate>
+                                                </Button.Template>
+                                            </Button>
+
+                                            <bd:ErrorState
+                                                Margin="12"
+                                                What="这个视频显示不了"
+                                                Where="{Binding Error}"
+                                                Visibility="{Binding HasError, Converter={StaticResource BoolToVisibility}}" />
+
+                                            <Border
+                                                Margin="0,0,6,6"
+                                                Padding="5,1,5,1"
+                                                HorizontalAlignment="Right"
+                                                VerticalAlignment="Bottom"
+                                                Background="{DynamicResource InkBrush}"
+                                                CornerRadius="{StaticResource RadiusBar}"
+                                                Opacity="0.85">
+                                                <TextBlock
+                                                    FontSize="{DynamicResource FontSizeBadge}"
+                                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                                    Text="{Binding SizeText}" />
+                                            </Border>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+
+                            </ItemsControl.Resources>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

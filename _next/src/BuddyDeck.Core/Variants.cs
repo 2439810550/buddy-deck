@@ -27,6 +27,13 @@ public sealed record UpstreamVariant
     /// <summary>桌面 App 登录态文件名。</summary>
     public required string DesktopFilename { get; init; }
 
+    /// <summary>
+    /// 桌面 App 的产品名 —— 注册表 DisplayName 的前缀（`WorkBuddy 5.8.3`）。
+    ///
+    /// 探测真实版本号时要用它去查注册表。写错了就查不到，会掉到兜底版本。
+    /// </summary>
+    public required string AppDisplayName { get; init; }
+
     /// <summary>保险库里存凭证的文件名。</summary>
     public required string VaultFilename { get; init; }
 
@@ -41,6 +48,7 @@ public sealed record UpstreamVariant
         ChatBase = "https://copilot.tencent.com",
         BillingBase = "https://www.codebuddy.cn",
         DesktopFilename = "workbuddy-desktop.info",
+        AppDisplayName = "WorkBuddy",
         VaultFilename = "auth.cn.json",
     };
 
@@ -52,6 +60,7 @@ public sealed record UpstreamVariant
         ChatBase = "https://www.workbuddy.ai",
         BillingBase = "https://www.workbuddy.ai",
         DesktopFilename = "workbuddy-desktop-ai.info",
+        AppDisplayName = "WorkBuddy AI",
         VaultFilename = "auth.ai.json",
         IsInternational = true,
     };

@@ -80,3 +80,12 @@ WorkBuddyPanel/tests/**/bin/
 
 # DeepSeek Harness 官方仓库（调研用，临时克隆）
 _dsh/
+
+# ── 目录分类（2026-10-21 整理）──────────────────────────────
+#
+# _archive/   弃用的实现（自建 Hub 等）—— 留档但不再维护
+# _research/  调研资料（GitHub 抄来的参考项目、设计技能）—— 大约 300 MB
+#
+# 两者都不入库：库里的应该是我们自己写的代码，不是别人的 clone。
+_archive/
+_research/

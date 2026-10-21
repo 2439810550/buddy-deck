@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    端到端测试工程（P4）。
+
+    ## 和 BuddyDeck.Gateway.Tests 的区别
+
+    Gateway.Tests 验的是「单个端点行为」；这里验的是**一条完整链路**：
+    客户端 → 真 Kestrel（端口 0）→ 网关 → 真 HttpClient → 假上游，
+    外加「多请求之间有状态」的场景（429 记冷却后换号、客户端取消、多次
+    请求指纹不变）。
+
+    ## 为什么用 BuddyDeck.TestSupport
+
+    假上游 + 真宿主这两个夹具已经有一份了（tests/BuddyDeck.TestSupport）。
+    再抄一份的话，两边对「429 该不该换号」「SSE 怎么分块」的假设迟早漂移 ——
+    那种漂移的后果是两边都写出「绿的假测试」。所以这里直接引用它。
+
+    ## 绝不引用真实上游
+
+    所有上游交互都走 FakeUpstreamHandler（一个 HttpMessageHandler），
+    不建真连接、不读真账号、不消耗任何配额。
+  -->
+  <PropertyGroup>
+    <RootNamespace>BuddyDeck.E2E.Tests</RootNamespace>
+    <AssemblyName>BuddyDeck.E2E.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- 和别的测试项目一致：xUnit 断言里的可空/分析器噪声不当编译错误 -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CA1861;CA1707;CA1869;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 共享夹具：假上游 + 真宿主 + 凭证工厂 -->
+    <ProjectReference Include="../BuddyDeck.TestSupport/BuddyDeck.TestSupport.csproj" />
+  </ItemGroup>
+</Project>

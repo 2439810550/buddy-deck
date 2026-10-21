@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>BuddyDeck.Gateway.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <TargetFramework>net8.0</TargetFramework>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CA1861;CA1707</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/BuddyDeck.Gateway/BuddyDeck.Gateway.csproj" />
+    <!-- 共享夹具：FakeUpstreamHandler / UpstreamResponses / UpstreamScript / TestVault / GatewayHost。
+         t2 新增的 GatewayObservabilityTests / ObservabilityFixture 用的是这一套。 -->
+    <ProjectReference Include="../BuddyDeck.TestSupport/BuddyDeck.TestSupport.csproj" />
+
+    <!--
+      ⚠ 这里**故意不再引用** ../BuddyDeck.Core.Tests（t58 去掉的耦合）。
+
+      原先有一行 `ProjectReference → BuddyDeck.Core.Tests`，为的是复用它里面那个
+      旧 `FakeUpstream`。**那笔债今天真的咬了人**：features 写 CreditsHttpTests 时
+      把 Core.Tests 弄出编译错误 → **本项目的测试一条都跑不了**，
+      而红的是别人的文件，极易被误判成「是不是我弄坏的」。
+
+      测试项目之间**不该有编译期依赖** —— 一个测试项目的编译错误不该拖住另一个。
+      现在本项目的 FakeUpstream 是自己的本地副本（见 ./FakeUpstream.cs 的说明）。
+    -->
+  </ItemGroup>
+</Project>

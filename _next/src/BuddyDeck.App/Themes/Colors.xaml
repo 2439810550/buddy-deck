@@ -1,0 +1,130 @@
+<!--
+  Colors.xaml —— BuddyDeck 的色板与语义色。
+
+  ## 这个文件的两层结构（别把两层混起来）
+
+  · **基色层**（Ink / Surface / Rail / Chalk / Steel / Amber）——
+    「哪一层面板」。只表达层级，**不表达任何状态**。
+    一个号过期了，它的底色和别的号一样。变的是状态条和徽章。
+  · **语义色层**（Ok / Warn / Stop / Fault / Idle / Cool）——
+    「这个号现在怎么样」。**只用在能表达真实状态的地方**，
+    不做装饰、不做强调、不做「让界面好看点」。
+
+  为什么要分两层：如果状态色可以拿来装饰，三个月后整个界面会变成
+  一堆彩色标签，用户就再也认不出哪个颜色是「要出事」。
+
+  ## 为什么是暖琥珀做强调色
+
+  蓝是「科技感」的默认答案，而且和 Mica 的系统强调色会打架；
+  酸绿是 AI 生成深色界面的识别特征。琥珀是配电盘指示灯的既有语汇 ——
+  它的含义（注意 / 带电 / 在这里）在现实里已经存在，用户不用重新学。
+
+  ## 关键约束：Fault 和 Stop 必须是两个不同的红
+
+  Stop(#C9553F 暗红)  = 号废了，要你动手换
+  Fault(#B4713C 锈橙) = 上游的问题，等一等，别动
+
+  这两件事是值班的人最需要区分的，做成同一个红就等于没表达。
+
+  Cool(#6E7FA8 蓝紫) 不是故障色。冷却是池子正常的调度行为 ——
+  上游限流一个模型是家常便饭，池子会自动换号。给它红色会让用户
+  以为天天出事故。
+
+  详见 docs/ui-design-plan.md 第 1.1 / 1.2 节。
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- ============ 基色层：面板层级 ============ -->
+  <!-- L0 窗口底。带一点蓝的深灰，不是纯黑 —— #0B0B0B 那种「冒充黑的黑」
+       是 AI 生成深色界面的识别特征之一，而且纯黑在 OLED 上和内容对比过硬。 -->
+  <Color x:Key="InkColor">#FF0E1114</Color>
+  <!-- L1 内容底：列表、区块 -->
+  <Color x:Key="SurfaceColor">#FF171C21</Color>
+  <!-- L2 抬升面：悬停行、弹层、被选中项。层级靠明度阶梯，不靠阴影。 -->
+  <Color x:Key="RailColor">#FF212932</Color>
+  <!-- L1.5 半抬升：斑马纹、表头。比 Surface 高一点点，扫读时不抢注意力。 -->
+  <Color x:Key="RailSubtleColor">#FF1B2229</Color>
+  <!-- 1px 分隔线与边框。整个界面没有阴影，所有边界都由它和明度台阶表达。 -->
+  <Color x:Key="HairlineColor">#FF262E37</Color>
+
+  <!-- ============ 文字层级 ============ -->
+  <!-- 主文字。冷白不是纯白 —— 纯白在深底上会有光晕感，长时间看很累。 -->
+  <Color x:Key="TextPrimaryColor">#FFE6EDF3</Color>
+  <!-- 次文字：标签、单位、时间戳、「企业/个人」这类属性 -->
+  <Color x:Key="TextSecondaryColor">#FF8B98A5</Color>
+  <!-- 三级文字：占位符、禁用态、空值「—」 -->
+  <Color x:Key="TextTertiaryColor">#FF5A6672</Color>
+
+  <!-- ============ 语义色层：账号/网关的真实状态 ============ -->
+  <!-- 强调色。焦点框、可点的东西、「现在在这里」的指示。 -->
+  <Color x:Key="AccentColor">#FFD2A24C</Color>
+  <!-- 可用。Healthy -->
+  <Color x:Key="OkColor">#FF4F9E6E</Color>
+  <!-- 即将过期。ExpiringSoon —— 复用强调色是刻意的：琥珀本来就是「该看一眼」 -->
+  <Color x:Key="WarnColor">#FFD2A24C</Color>
+  <!-- 已过期。号废了 -->
+  <Color x:Key="StopColor">#FFC9553F</Color>
+  <!-- 异常。上游拒绝 / 被限流 —— 和 Stop 区分开，见文件头注释 -->
+  <Color x:Key="FaultColor">#FFB4713C</Color>
+  <!-- 未知 / 网关未启动。中性灰，不报警 -->
+  <Color x:Key="IdleColor">#FF5A6672</Color>
+  <!-- 冷却中。蓝紫，不是红 —— 冷却是正常调度，不是故障 -->
+  <Color x:Key="CoolColor">#FF6E7FA8</Color>
+
+  <!-- ============ 基色 Brush ============ -->
+  <SolidColorBrush x:Key="InkBrush" Color="{StaticResource InkColor}" />
+  <SolidColorBrush x:Key="SurfaceBrush" Color="{StaticResource SurfaceColor}" />
+  <SolidColorBrush x:Key="RailBrush" Color="{StaticResource RailColor}" />
+  <SolidColorBrush x:Key="RailSubtleBrush" Color="{StaticResource RailSubtleColor}" />
+  <SolidColorBrush x:Key="HairlineBrush" Color="{StaticResource HairlineColor}" />
+
+  <!-- Mica 是半透明的，内容层必须自己给不透明底（HANDOVER 坑 4）。
+       窗口根元素的 Background 用这个。 -->
+  <SolidColorBrush x:Key="WindowBackgroundBrush" Color="{StaticResource InkColor}" />
+
+  <!-- ============ 文字 Brush ============ -->
+  <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource TextPrimaryColor}" />
+  <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondaryColor}" />
+  <SolidColorBrush x:Key="TextTertiaryBrush" Color="{StaticResource TextTertiaryColor}" />
+
+  <!-- ============ 语义 Brush ============ -->
+  <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}" />
+  <SolidColorBrush x:Key="OkBrush" Color="{StaticResource OkColor}" />
+  <SolidColorBrush x:Key="WarnBrush" Color="{StaticResource WarnColor}" />
+  <SolidColorBrush x:Key="StopBrush" Color="{StaticResource StopColor}" />
+  <SolidColorBrush x:Key="FaultBrush" Color="{StaticResource FaultColor}" />
+  <SolidColorBrush x:Key="IdleBrush" Color="{StaticResource IdleColor}" />
+  <SolidColorBrush x:Key="CoolBrush" Color="{StaticResource CoolColor}" />
+
+  <!-- 焦点框。键盘用户靠它导航，必须能看见（SKILL.md 的质量下限）。 -->
+  <SolidColorBrush x:Key="FocusBrush" Color="{StaticResource AccentColor}" />
+
+  <!--
+    ============ 状态竖条 ============
+    列表行左侧 3px、状态轨里那些竖条用。0.85 不透明度：
+    满饱和的实色在细长条上会糊成一块亮斑，压暗一点才有「刻度」的感觉。
+  -->
+  <SolidColorBrush x:Key="OkRailBrush" Color="{StaticResource OkColor}" Opacity="0.85" />
+  <SolidColorBrush x:Key="WarnRailBrush" Color="{StaticResource WarnColor}" Opacity="0.85" />
+  <SolidColorBrush x:Key="StopRailBrush" Color="{StaticResource StopColor}" Opacity="0.85" />
+  <SolidColorBrush x:Key="FaultRailBrush" Color="{StaticResource FaultColor}" Opacity="0.85" />
+  <SolidColorBrush x:Key="IdleRailBrush" Color="{StaticResource IdleColor}" Opacity="0.7" />
+  <SolidColorBrush x:Key="CoolRailBrush" Color="{StaticResource CoolColor}" Opacity="0.85" />
+
+  <!--
+    ============ 用量条 / 徽章的底色 ============
+    条的「已走完的部分」需要一个比底色亮一档但不抢眼的槽。
+  -->
+  <SolidColorBrush x:Key="BarTrackBrush" Color="{StaticResource RailColor}" />
+
+  <!-- 徽章的底：状态色压到 0.16，让徽章有色相但不刺眼。
+       徽章本身是「一个词 + 一层薄色」，不是实心色块。 -->
+  <SolidColorBrush x:Key="OkBadgeBackgroundBrush" Color="{StaticResource OkColor}" Opacity="0.16" />
+  <SolidColorBrush x:Key="WarnBadgeBackgroundBrush" Color="{StaticResource WarnColor}" Opacity="0.16" />
+  <SolidColorBrush x:Key="StopBadgeBackgroundBrush" Color="{StaticResource StopColor}" Opacity="0.16" />
+  <SolidColorBrush x:Key="FaultBadgeBackgroundBrush" Color="{StaticResource FaultColor}" Opacity="0.16" />
+  <SolidColorBrush x:Key="IdleBadgeBackgroundBrush" Color="{StaticResource IdleColor}" Opacity="0.16" />
+  <SolidColorBrush x:Key="CoolBadgeBackgroundBrush" Color="{StaticResource CoolColor}" Opacity="0.16" />
+
+</ResourceDictionary>

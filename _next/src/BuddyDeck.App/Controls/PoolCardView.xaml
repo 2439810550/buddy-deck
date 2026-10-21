@@ -1,0 +1,178 @@
+<UserControl
+    x:Class="BuddyDeck.App.Controls.PoolCardView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:bd="clr-namespace:BuddyDeck.App.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    d:DesignHeight="200"
+    d:DesignWidth="260"
+    mc:Ignorable="d">
+
+    <!--
+        号池卡片：一张卡 = 一个池。
+        默认只显示核心信息，悬浮微放大，「更多」展开操作菜单。
+    -->
+    <Border
+        x:Name="Root"
+        Width="260"
+        Margin="0,0,14,14"
+        Padding="16,14"
+        Background="{DynamicResource SurfaceBrush}"
+        BorderBrush="{DynamicResource HairlineBrush}"
+        BorderThickness="{StaticResource BorderHairline}"
+        CornerRadius="{StaticResource RadiusPanel}"
+        RenderTransformOrigin="0.5,0.5">
+        <Border.RenderTransform>
+            <ScaleTransform ScaleX="1" ScaleY="1" />
+        </Border.RenderTransform>
+        <Border.Style>
+            <Style TargetType="Border">
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Trigger.EnterActions>
+                            <BeginStoryboard>
+                                <Storyboard>
+                                    <DoubleAnimation
+                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                        To="1.03" Duration="{StaticResource MotionExpand}" />
+                                    <DoubleAnimation
+                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                        To="1.03" Duration="{StaticResource MotionExpand}" />
+                                </Storyboard>
+                            </BeginStoryboard>
+                        </Trigger.EnterActions>
+                        <Trigger.ExitActions>
+                            <BeginStoryboard>
+                                <Storyboard>
+                                    <DoubleAnimation
+                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                        To="1" Duration="{StaticResource MotionExpand}" />
+                                    <DoubleAnimation
+                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                        To="1" Duration="{StaticResource MotionExpand}" />
+                                </Storyboard>
+                            </BeginStoryboard>
+                        </Trigger.ExitActions>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+        </Border.Style>
+        <StackPanel>
+            <!-- 头部：名字 + 状态点 -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal">
+                    <bd:StatusDot
+                        Margin="0,0,8,0"
+                        VerticalAlignment="Center"
+                        Online="{Binding Running}" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        Style="{DynamicResource TextBody}"
+                        FontWeight="SemiBold"
+                        Foreground="{DynamicResource TextPrimaryBrush}"
+                        Text="{Binding DisplayName}"
+                        TextTrimming="CharacterEllipsis" />
+                    <Border
+                        Margin="8,0,0,0"
+                        Padding="5,1,5,1"
+                        VerticalAlignment="Center"
+                        Background="{DynamicResource RailBrush}"
+                        CornerRadius="{StaticResource RadiusBar}"
+                        Visibility="{Binding IsDefault, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock
+                            FontSize="{StaticResource FontSizeBadge}"
+                            Foreground="{DynamicResource TextSecondaryBrush}"
+                            Text="默认" />
+                    </Border>
+                </StackPanel>
+            </Grid>
+
+            <!-- 元信息 -->
+            <TextBlock
+                Margin="0,8,0,0"
+                Style="{DynamicResource TextSmall}"
+                Foreground="{DynamicResource TextTertiaryBrush}"
+                Text="{Binding Endpoint}"
+                TextTrimming="CharacterEllipsis" />
+            <TextBlock
+                Margin="0,4,0,0"
+                Style="{DynamicResource TextSmall}"
+                Foreground="{DynamicResource TextSecondaryBrush}"
+                Text="{Binding AccountCountText}" />
+
+            <!-- 操作行 -->
+            <StackPanel Margin="0,14,0,0" Orientation="Horizontal">
+                <ui:Button
+                    Margin="0,0,6,0"
+                    Padding="10,4"
+                    Click="OnTogglePool"
+                    Content="{Binding ToggleText}"
+                    FontSize="11">
+                    <ui:Button.Style>
+                        <Style TargetType="ui:Button">
+                            <Setter Property="Appearance" Value="Secondary" />
+                            <Style.Triggers>
+                                <!-- 停着=Primary（醒目的「启动」），跑着=Danger（「停止」） -->
+                                <DataTrigger Binding="{Binding Running}" Value="False">
+                                    <Setter Property="Appearance" Value="Primary" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Running}" Value="True">
+                                    <Setter Property="Appearance" Value="Danger" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ui:Button.Style>
+                </ui:Button>
+                <ui:Button
+                    Margin="0,0,6,0"
+                    Padding="10,4"
+                    Appearance="Secondary"
+                    Click="OnEditPool"
+                    Content="编辑"
+                    FontSize="11" />
+                <ui:Button
+                    Padding="10,4"
+                    Appearance="Transparent"
+                    Click="OnMorePool"
+                    Content="更多"
+                    FontSize="11" />
+            </StackPanel>
+
+            <!-- 更多菜单 -->
+            <StackPanel
+                x:Name="MorePanel"
+                Margin="0,10,0,0"
+                Visibility="Collapsed">
+                <Border
+                    Padding="10,8"
+                    Background="{DynamicResource RailSubtleBrush}"
+                    CornerRadius="{StaticResource RadiusRow}">
+                    <StackPanel>
+                        <ui:Button
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Appearance="Transparent"
+                            Click="OnSelectPool"
+                            Content="查看账号"
+                            Icon="{ui:SymbolIcon Symbol=People24}" />
+                        <ui:Button
+                            Margin="0,4,0,0"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Appearance="Transparent"
+                            Click="OnRemovePool"
+                            Content="删除这个池"
+                            Icon="{ui:SymbolIcon Symbol=Delete24}"
+                            Visibility="{Binding CanRemove, Converter={StaticResource BoolToVisibility}}" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</UserControl>

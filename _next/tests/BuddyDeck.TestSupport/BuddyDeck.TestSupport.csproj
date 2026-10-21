@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    共享测试夹具（不是测试项目，本身不含测试）。
+
+    为什么是 classlib 而不是 test 项目：它要同时被
+      · tests/BuddyDeck.Gateway.Tests（网关）
+      · tests/BuddyDeck.E2E.Tests（端到端）
+    引用。两边共用同一套「上游行为」假设，才不会各造一遍 FakeUpstream 之后
+    对 429 的分类、对 SSE 的切块方式产生分歧，导致测试互相打架。
+
+    它引用 BuddyDeck.Gateway 是为了 GatewayHost / FakeCredentialSource ——
+    起一个真宿主必须知道网关的装配方式。**绝不允许反向引用**（Gateway 引用
+    TestSupport），那会把测试夹具拖进生产依赖。
+  -->
+  <PropertyGroup>
+    <RootNamespace>BuddyDeck.TestSupport</RootNamespace>
+    <AssemblyName>BuddyDeck.TestSupport</AssemblyName>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- xUnit 断言里的可空警告在测试项目自己关，这个同理 -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/BuddyDeck.Core/BuddyDeck.Core.csproj" />
+    <ProjectReference Include="../../src/BuddyDeck.Gateway/BuddyDeck.Gateway.csproj" />
+  </ItemGroup>
+</Project>

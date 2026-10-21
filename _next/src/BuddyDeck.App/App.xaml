@@ -1,0 +1,59 @@
+<Application
+    x:Class="BuddyDeck.App.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:conv="clr-namespace:BuddyDeck.App.Converters">
+    <!--
+        刻意不写 StartupUri：主窗口由 App.xaml.cs 自己建。
+        原因只有一个 —— 截图模式（命令行参数 probe，见 App.xaml.cs）要在六张图
+        都写完后再退出，而 StartupUri 会让 WPF 在启动后立刻自动建窗口并按
+        主窗口生命周期退出，两者会打架。自己建窗口只多三行，换来了截图路径的可控。
+    -->
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!--
+                    ① WPF-UI 的控件主题。这两本必须最先合，顺序也别动：
+                       Controls 依赖 Themes 里已经定义好的画刷，反过来会找不到 key。
+                -->
+                <ui:ThemesDictionary Theme="Dark" />
+                <ui:ControlsDictionary />
+
+                <!--
+                    ② 队友 design（t6）的视觉基座。顺序由他定，且必须严格按这个顺序
+                       —— 后面的本子引用前面的本子里的 key。详见 docs/ui-design-plan.md 4.1。
+                -->
+                <ResourceDictionary Source="Themes/Colors.xaml" />
+                <ResourceDictionary Source="Themes/Typography.xaml" />
+                <ResourceDictionary Source="Themes/Metrics.xaml" />
+                <ResourceDictionary Source="Themes/Motion.xaml" />
+                <ResourceDictionary Source="Themes/Controls.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!--
+                ③ 转换器实例。
+                这里是 XAML 层唯一必须由我写的一段 —— 转换器类归 design（Converters/），
+                但实例得在 XAML 里声明一次。名字和用法按他给的清单，我不自造。
+
+                ⚠ 反相的三个必须写 Invert="True"。
+                反相是**实例状态**，不是 x:Key 自带的 —— 漏写就退化成正相，
+                而且行为错得完全静默（该显示的块变成空白），编译期与运行期都不报错。
+                design 2026-10 给转换器加了 Invert 属性就是为了消掉这个坑；
+                他那边有回归测试钉住（VisibilityConverterTests）。
+                我这边对应地把页面里原先的 ConverterParameter=invert 写法撤掉了 ——
+                两套写法同时留着，以后没人说得清哪个在起作用。
+            -->
+            <conv:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+            <conv:BoolToVisibilityConverter x:Key="InverseBoolToVisibility" Invert="True" />
+            <conv:StringToVisibilityConverter x:Key="StringToVisibility" />
+            <conv:StringToVisibilityConverter x:Key="EmptyStringToVisibility" Invert="True" />
+            <conv:EmptyCollectionToVisibilityConverter x:Key="EmptyCollectionToVisibility" />
+            <conv:EmptyCollectionToVisibilityConverter x:Key="NotEmptyCollectionToVisibility" Invert="True" />
+            <conv:TimestampConverter x:Key="Timestamp" />
+            <conv:RemainingTimeConverter x:Key="RemainingTime" />
+            <conv:RemainingTimeConverter x:Key="CooldownTime" />
+            <conv:AccountStateBrushConverter x:Key="AccountStateBrush" />
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

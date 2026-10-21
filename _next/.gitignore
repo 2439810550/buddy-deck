@@ -2,3 +2,11 @@ bin/
 obj/
 *.user
 publish/
+
+# 运行时数据（网关的数据库、日志、媒体缓存）
+.local/
+.tmp-probe/
+
+# 测试/工具链临时产物
+probe-wait-*.txt
+.agent-teams/

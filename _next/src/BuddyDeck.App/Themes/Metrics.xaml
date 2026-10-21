@@ -1,0 +1,89 @@
+<!--
+  Metrics.xaml —— 间距、圆角、描边、尺寸。
+
+  ## 层级靠结构，不靠装饰（这个文件是这条原则的落点）
+
+  整个界面**没有阴影**。SaaS 卡片套装（识别特征 4）的核心做法是
+  「所有卡片同一个圆角 + 同一个 rgba(0,0,0,.1) 软阴影」。这里两条都砍了：
+
+  · 层级由 Colors.xaml 的三级明度阶梯（Ink → Surface → Rail）表达
+  · 边界由 StrokeHairline 的 1px 线表达
+  · 分组由 SpaceSection 的距离表达
+
+  列表就是列表，它不悬浮。只有真的浮起来的东西（弹窗、菜单）才配多一点圆角。
+
+  ## 圆角说尺寸
+
+  RadiusBar(2) < RadiusRow(4) < RadiusPanel(6) < RadiusDialog(8)
+
+  细长元素用大圆角会变成「药丸形」，看起来像按钮；
+  列表行是**排队的单位**，方一点才像表。
+  一刀切圆角正是识别特征 4 要抓的东西，所以这里按尺寸分级。
+
+  ## 间距：分组只有一个距离
+
+  SpaceSection = 24 是**唯一**的分组距离。任何「这里看起来需要空一点」
+  的冲动都用它，不要临时发明 20 或 28 —— 那会很快长出一堆 4 的倍数的
+  近似值，然后没人分得清哪两个区块是一组的。
+
+  详见 docs/ui-design-plan.md 第 1.4 / 1.5 节。
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+
+  <!-- ============ 间距 ============ -->
+  <!-- 4 紧贴：图标与它说明的那个词、徽章与它的文字 -->
+  <Thickness x:Key="SpaceInline">4</Thickness>
+  <Thickness x:Key="SpaceInlineValue">4,0,4,0</Thickness>
+  <!-- 8 同一行内元素之间 -->
+  <Thickness x:Key="SpaceTight">8</Thickness>
+  <Thickness x:Key="SpaceTightVertical">0,0,0,8</Thickness>
+  <!-- 12 列表行上下内边距。行高够高才好点（值班的人会用鼠标匆匆点过去）。 -->
+  <Thickness x:Key="SpaceRow">0,12,0,12</Thickness>
+  <Thickness x:Key="SpaceRowHorizontal">12,0,12,0</Thickness>
+  <!-- 16 控件之间、区块内边距 -->
+  <Thickness x:Key="SpaceControl">16</Thickness>
+  <Thickness x:Key="SpaceControlAll">16,16,16,16</Thickness>
+  <!-- 24 区块之间 —— 唯一的分组距离 -->
+  <Thickness x:Key="SpaceSection">0,0,0,24</Thickness>
+  <!-- 32 页面外边距 -->
+  <Thickness x:Key="SpacePage">32,24,32,24</Thickness>
+
+  <!-- ============ 圆角（按尺寸分级，不搞一刀切） ============ -->
+  <!-- 2 细长元素：用量条、状态条、分隔小块 -->
+  <CornerRadius x:Key="RadiusBar">2</CornerRadius>
+  <!-- 4 列表行、输入框、按钮 -->
+  <CornerRadius x:Key="RadiusRow">4</CornerRadius>
+  <!-- 6 单独的分区块 -->
+  <CornerRadius x:Key="RadiusPanel">6</CornerRadius>
+  <!-- 8 弹窗、菜单 —— 只有浮起来的东西才配最圆 -->
+  <CornerRadius x:Key="RadiusDialog">8</CornerRadius>
+
+  <!-- ============ 描边 ============ -->
+  <!-- 1px 分隔线 / 边框粗细 -->
+  <sys:Double x:Key="StrokeHairline">1</sys:Double>
+  <!-- 2px 焦点框粗细。键盘导航靠它，不能细。 -->
+  <sys:Double x:Key="StrokeFocus">2</sys:Double>
+
+  <!-- ============ 尺寸 ============ -->
+  <!-- 56 左侧状态轨宽度：账号余量的竖条住在这里 -->
+  <sys:Double x:Key="SizeStatusRail">56</sys:Double>
+  <!-- 3 列表行左侧状态条宽度 -->
+  <sys:Double x:Key="SizeRowRail">3</sys:Double>
+  <!-- 48 顶栏高度 -->
+  <sys:Double x:Key="SizeTopBar">48</sys:Double>
+  <!-- 6 用量条高度。够细才有「刻度」感，够粗才能看见颜色。 -->
+  <sys:Double x:Key="SizeQuotaBarHeight">6</sys:Double>
+  <!-- 8 状态点直径（顶栏「网关已连接」那个点） -->
+  <sys:Double x:Key="SizeStatusDot">8</sys:Double>
+  <!-- 160 标签列宽度：详情页左边「标签 / 值」两列的左边那列 -->
+  <sys:Double x:Key="SizeLabelColumn">160</sys:Double>
+  <!-- 720 正文最大宽度（SKILL.md：行宽 < 80 字符） -->
+  <sys:Double x:Key="SizeMaxReadingWidth">720</sys:Double>
+
+  <!-- ============ 描边 Thickness（Border 用） ============ -->
+  <Thickness x:Key="BorderHairline">1</Thickness>
+  <Thickness x:Key="BorderLeftRail">3,0,0,0</Thickness>
+
+</ResourceDictionary>

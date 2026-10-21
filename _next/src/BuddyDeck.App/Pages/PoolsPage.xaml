@@ -1,0 +1,329 @@
+<UserControl
+    x:Class="BuddyDeck.App.Pages.PoolsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:bd="clr-namespace:BuddyDeck.App.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    d:DesignHeight="700"
+    d:DesignWidth="1000"
+    mc:Ignorable="d">
+
+    <!--
+        接入池页。
+        一个池 = 一套账号 + 一个接入地址（端口 + key），给不同的客户端用。
+        这一页不显示状态轨 —— 状态轨的主题是「号还有多少能打」，
+        而这一页的主题是「哪个地址开着」。签名元素只出现在该出现的地方。
+    -->
+    <Grid Margin="{StaticResource SpacePage}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 页头 -->
+        <Grid Grid.Row="0" Margin="0,0,0,20">
+            <StackPanel>
+                <TextBlock
+                    Style="{DynamicResource TextPageTitle}"
+                    Foreground="{DynamicResource TextPrimaryBrush}"
+                    Text="接入池" />
+                <TextBlock
+                    Margin="0,5,0,0"
+                    Style="{DynamicResource TextSmall}"
+                    Foreground="{DynamicResource TextSecondaryBrush}"
+                    Text="一套账号一个地址，给不同的客户端用" />
+            </StackPanel>
+
+            <StackPanel
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Orientation="Horizontal">
+                <ui:Button
+                    Margin="0,0,8,0"
+                    Appearance="Primary"
+                    Command="{Binding NewPoolCommand}"
+                    Content="新建接入池"
+                    Icon="{ui:SymbolIcon Symbol=Add24}" />
+                <ui:Button
+                    Appearance="Secondary"
+                    Command="{Binding RefreshCommand}"
+                    Content="刷新"
+                    Icon="{ui:SymbolIcon Symbol=ArrowSync24}" />
+            </StackPanel>
+        </Grid>
+
+        <!-- 提示条 -->
+        <Border
+            Grid.Row="1"
+            Margin="0,0,0,14"
+            Padding="10,8,10,8"
+            Background="{DynamicResource RailSubtleBrush}"
+            BorderBrush="{DynamicResource HairlineBrush}"
+            BorderThickness="{StaticResource BorderHairline}"
+            CornerRadius="{StaticResource RadiusRow}"
+            Visibility="{Binding Notice, Converter={StaticResource StringToVisibility}}">
+            <TextBlock Text="{Binding Notice}" TextWrapping="Wrap">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock"><Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" /><Setter Property="FontFamily" Value="{DynamicResource FontUi}" />
+                        <Setter Property="Foreground" Value="{DynamicResource OkBrush}" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding NoticeIsError}" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource StopBrush}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+        </Border>
+
+        <!-- 列表 + 层级：池 → 账号 -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1*" MinWidth="280" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="1.4*" MinWidth="360" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="1*" MinWidth="280" />
+            </Grid.ColumnDefinitions>
+
+            <!-- ① 池列表 -->
+            <Border
+                Grid.Column="0"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource HairlineBrush}"
+                BorderThickness="{StaticResource BorderHairline}"
+                CornerRadius="{StaticResource RadiusPanel}">
+                <Grid>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding Pools}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border
+                                        Style="{DynamicResource ListRow}"
+                                        Cursor="Hand"
+                                        Tag="{Binding}"
+                                        MouseLeftButtonUp="OnSelectPool">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="3" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <!-- 左侧状态条：跑着=绿，停着=灰 -->
+                                            <Border Grid.Column="0" CornerRadius="{StaticResource RadiusBar}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="{DynamicResource IdleRailBrush}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Running}" Value="True">
+                                                                <Setter Property="Background" Value="{DynamicResource OkRailBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                            </Border>
+
+                                            <StackPanel Grid.Column="1" Margin="12,0,0,0">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock
+                                                        Style="{DynamicResource ListRowTitle}"
+                                                        Foreground="{DynamicResource TextPrimaryBrush}"
+                                                        Text="{Binding DisplayName}"
+                                                        TextTrimming="CharacterEllipsis" />
+                                                    <Border
+                                                        Margin="8,0,0,0"
+                                                        Padding="5,1,5,1"
+                                                        VerticalAlignment="Center"
+                                                        Background="{DynamicResource RailBrush}"
+                                                        CornerRadius="{StaticResource RadiusBar}"
+                                                        Visibility="{Binding IsDefault, Converter={StaticResource BoolToVisibility}}">
+                                                        <TextBlock
+                                                            FontSize="{StaticResource FontSizeBadge}"
+                                                            Foreground="{DynamicResource TextSecondaryBrush}"
+                                                            Text="默认" />
+                                                    </Border>
+                                                </StackPanel>
+                                                <TextBlock
+                                                    Margin="0,3,0,0"
+                                                    Style="{DynamicResource ListRowMeta}"
+                                                    Foreground="{DynamicResource TextTertiaryBrush}"
+                                                    TextTrimming="CharacterEllipsis">
+                                                    <TextBlock.Text>
+                                                        <MultiBinding StringFormat="{}{0}，{1}">
+                                                            <Binding Path="Endpoint" />
+                                                            <Binding Path="AccountCountText" />
+                                                        </MultiBinding>
+                                                    </TextBlock.Text>
+                                                </TextBlock>
+                                            </StackPanel>
+
+                                            <StackPanel
+                                                Grid.Column="2"
+                                                Margin="12,0,0,0"
+                                                VerticalAlignment="Center"
+                                                Orientation="Horizontal">
+                                                <ui:Button
+                                                    Margin="0,0,4,0"
+                                                    Appearance="Secondary"
+                                                    Click="OnTogglePool"
+                                                    Content="{Binding ToggleText}"
+                                                    Tag="{Binding}" />
+                                                <ui:Button
+                                                    Margin="0,0,4,0"
+                                                    Appearance="Transparent"
+                                                    Click="OnEditPool"
+                                                    Content="改名"
+                                                    Tag="{Binding}" />
+                                                <ui:Button
+                                                    Appearance="Transparent"
+                                                    Click="OnRemovePool"
+                                                    Content="删除"
+                                                    Tag="{Binding}"
+                                                    Visibility="{Binding CanRemove, Converter={StaticResource BoolToVisibility}}" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <bd:EmptyState
+                        Headline="还没有接入池"
+                        Detail="建一个池，把账号和地址配到一起。"
+                        Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}" />
+                </Grid>
+            </Border>
+
+            <!-- ② 选中池的账号（层级第二层）-->
+            <Border
+                Grid.Column="2"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource HairlineBrush}"
+                BorderThickness="{StaticResource BorderHairline}"
+                CornerRadius="{StaticResource RadiusPanel}">
+                <Grid>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock
+                                Margin="16,14,16,10"
+                                Style="{DynamicResource TextSectionTitle}"
+                                Foreground="{DynamicResource TextPrimaryBrush}"
+                                Text="{Binding Selected.DisplayName, StringFormat={}{0} 的账号}"
+                                Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}" />
+
+                            <ItemsControl ItemsSource="{Binding PoolAccounts}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border
+                                            Margin="12,0,12,8"
+                                            Padding="12,10"
+                                            Background="{DynamicResource RailSubtleBrush}"
+                                            CornerRadius="{StaticResource RadiusRow}">
+                                            <StackPanel>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <bd:AccountStateBadge State="{Binding State}" />
+                                                    <TextBlock
+                                                        Margin="8,0,0,0"
+                                                        VerticalAlignment="Center"
+                                                        Style="{DynamicResource TextBody}"
+                                                        Foreground="{DynamicResource TextPrimaryBrush}"
+                                                        Text="{Binding DisplayName}"
+                                                        TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                                <TextBlock
+                                                    Margin="0,6,0,0"
+                                                    Style="{DynamicResource TextSmall}"
+                                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                                    Text="{Binding Remaining}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <bd:EmptyState
+                                Margin="0,30,0,0"
+                                Headline="点左边的池"
+                                Detail="这里会显示这个池里的账号。"
+                                Visibility="{Binding HasSelection, Converter={StaticResource InverseBoolToVisibility}}" />
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+
+            <!-- ③ 新建/编辑表单 -->
+            <Border
+                Grid.Column="4"
+                Padding="{StaticResource SpaceControl}"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource HairlineBrush}"
+                BorderThickness="{StaticResource BorderHairline}"
+                CornerRadius="{StaticResource RadiusPanel}">
+                <Grid>
+                    <bd:EmptyState
+                        Headline="选中一个池看详情"
+                        Detail="或者点「新建接入池」建一个。"
+                        Visibility="{Binding ShowEditor, Converter={StaticResource InverseBoolToVisibility}}" />
+
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowEditor, Converter={StaticResource BoolToVisibility}}">
+                        <StackPanel>
+                            <TextBlock
+                                Style="{DynamicResource TextSectionTitle}"
+                                Foreground="{DynamicResource TextPrimaryBrush}"
+                                Text="{Binding EditorTitle}" />
+
+                            <TextBlock
+                                Margin="0,16,0,6"
+                                Style="{DynamicResource FieldLabel}"
+                                Text="名字" />
+                            <ui:TextBox
+                                PlaceholderText="比如：默认池"
+                                Text="{Binding EditorName, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock
+                                Margin="0,14,0,6"
+                                Style="{DynamicResource FieldLabel}"
+                                Text="端口" />
+                            <ui:TextBox
+                                PlaceholderText="8788"
+                                Text="{Binding EditorPort, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock
+                                Margin="0,14,0,6"
+                                Style="{DynamicResource FieldLabel}"
+                                Text="API key" />
+                            <ui:TextBox
+                                PlaceholderText="给客户端用的密钥"
+                                Text="{Binding EditorApiKey, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <Rectangle
+                                Height="1"
+                                Margin="0,18,0,16"
+                                Fill="{DynamicResource HairlineBrush}" />
+
+                            <ui:Button
+                                Margin="0,0,0,8"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Appearance="Primary"
+                                Command="{Binding SaveEditorCommand}"
+                                Content="保存" />
+                            <ui:Button
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Appearance="Transparent"
+                                Command="{Binding CancelEditorCommand}"
+                                Content="取消" />
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

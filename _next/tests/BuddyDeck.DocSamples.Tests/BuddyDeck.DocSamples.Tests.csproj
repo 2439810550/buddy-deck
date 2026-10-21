@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    文档样例的**编译验证**项目。
+
+    为什么要有这个：docs/test-support.md 里那些「可复制示例」如果编译不过，
+    文档就是假的 —— 而下游 t1/t4 是照着文档写的，会一路踩到底。
+
+    这个项目**只有一组测试**：它们不测夹具的行为（那是
+    ../BuddyDeck.TestSupport.Tests 的活），只证明
+    「文档里贴的那几段代码，逐字抄下来能编译、能跑通」。
+  -->
+  <PropertyGroup>
+    <RootNamespace>BuddyDeck.TestSupport.DocSamples</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <TargetFramework>net8.0</TargetFramework>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CA1707;CA1711;xUnit1031</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../BuddyDeck.TestSupport/BuddyDeck.TestSupport.csproj" />
+  </ItemGroup>
+</Project>
