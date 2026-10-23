@@ -16,9 +16,17 @@
  * - `tool_choice` must be a plain string; the object forms return 400.
  * - The international gateway additionally requires the first message to be a
  *   `system` prompt.
+ * - The international gateway's channel check (HTTP 400, code 11128) demands the
+ *   full conversation triple — `X-Conversation-ID`, `X-Conversation-Request-ID`
+ *   and `X-Conversation-Message-ID` — on every chat request. A correct UA and
+ *   version are not enough: dropping any one of the three yields 11128. The CN
+ *   gateway does not check this family, so it is sent only on the global
+ *   variant. Verified on the wire against www.workbuddy.ai.
  *
  * @module workbuddy-api/upstream
  */
+
+import { randomUUID } from "node:crypto";
 
 import { appUserAgent, chatUserAgent, fallbackChatIdentity, resolveChatIdentity } from "./client-identity.js";
 
@@ -148,6 +156,13 @@ function commonHeaders(variant) {
  * It rides on the *same* resolved desktop identity as the UA — `clientVersion`
  * is that identity's app version — and, like the UA override, it belongs to
  * chat and probe only: refresh, catalog and billing must stay free of it.
+ *
+ * The conversation triple is the international gateway's channel check, not an
+ * identity header. The App always has a live conversation, so it always sends
+ * the three ids; a stateless proxy has none, so it must mint them. They are
+ * freshly generated per request: the upstream accepts a new conversation id on
+ * every call (it validates presence and shape, not continuity), which is what
+ * makes a stateless gateway possible at all.
  */
 export function chatHeaders(credential, variant, userAgent, clientVersion) {
   return {
@@ -163,6 +178,23 @@ export function chatHeaders(credential, variant, userAgent, clientVersion) {
     "X-IDE-Name": "WorkBuddy",
     ...(typeof clientVersion === "string" && clientVersion !== "" ? { "X-IDE-Version": clientVersion } : {}),
     "X-Product": "SaaS",
+    ...(variant.region === "global" ? conversationTripleHeaders() : {}),
+  };
+}
+
+/**
+ * The international gateway's conversation triple.
+ *
+ * All three are required together — dropping any single one makes the gateway
+ * answer 400 / code 11128 "Illegal API invocation from an unapproved channel",
+ * even with the App's exact UA and version. Values are opaque 32-hex ids, which
+ * is the shape the App's own `randomBytes(16).toString("hex")` produces.
+ */
+function conversationTripleHeaders() {
+  return {
+    "X-Conversation-ID": randomUUID().replaceAll("-", ""),
+    "X-Conversation-Request-ID": randomUUID().replaceAll("-", ""),
+    "X-Conversation-Message-ID": randomUUID().replaceAll("-", ""),
   };
 }
 

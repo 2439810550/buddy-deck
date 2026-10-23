@@ -62,7 +62,7 @@ public sealed partial class ClientIdentity
     public const string FallbackAppVersion = "5.8.3";
 
     /// <summary>国际版的兜底版本。开发机没装国际版，这个是估的。</summary>
-    public const string FallbackInternationalAppVersion = "5.4.2";
+    public const string FallbackInternationalAppVersion = "5.8.4";
 
     // 版本号必须是「1~4 段数字」，且不能有换行等能注入 header 的字符。
     [GeneratedRegex(@"^\d{1,6}(?:\.\d{1,6}){1,3}$")]

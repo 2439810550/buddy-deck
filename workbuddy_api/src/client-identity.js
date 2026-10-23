@@ -23,9 +23,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** Compiled-in CN fallback for the `WorkBuddy/<v>` tokens. */
-export const FALLBACK_CN_APP_VERSION = "5.5.6";
+export const FALLBACK_CN_APP_VERSION = "5.8.3";
 /** Compiled-in international fallback. */
-export const FALLBACK_AI_APP_VERSION = "5.5.2";
+export const FALLBACK_AI_APP_VERSION = "5.8.4";
 
 /** Run a command and return its stdout, or undefined on any failure. */
 export function tryExec(command, args) {
