@@ -3,6 +3,16 @@ node_modules/
 .DS_Store
 .env
 
+# 临时探针脚本和数据（排查时现造，不该入库）
+_probe*.mjs
+_probe*.js
+_probe*.json
+_ai-config.json
+_ai*.mjs
+_verify-*.mjs
+_e2e-*.mjs
+_probe-*.txt
+
 # local runtime state (never commit: contains credential copies)
 .workbuddy-api/
 *.workbuddy-auth.json
