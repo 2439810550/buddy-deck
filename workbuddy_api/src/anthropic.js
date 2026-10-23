@@ -78,11 +78,60 @@ function toSystemText(system) {
   return "";
 }
 
+/**
+ * Anthropic 的 `document` block → 文本。
+ *
+ * 上游（WorkBuddy）只认 OpenAI 的 content part：`text` 和 `image_url`。
+ * Anthropic 的 `document` 没有对应物，早先的写法是直接丢掉 —— 但那是错的：
+ * `source.type === "text"` 的 document 本身就是纯文本，丢掉等于把用户发来的
+ * 正文吞了（DSH 传 Word 时就是这种形态，模型完全看不到内容）。
+ *
+ * 三种形态分别处理：
+ *
+ * - `source.type: "text"`    —— 纯文本，原样转成 text block。
+ * - `source.type: "content"` —— 嵌套 block 数组（Anthropic 1.x 写法），拼起来。
+ * - `source.type: "base64"`  —— PDF / docx 等二进制。上游不认，但**不能静默丢**：
+ *                               留一句占位，让模型知道用户发过附件，
+ *                               而不是当成没发过、答非所问。
+ *
+ * @returns {{type: "text", text: string} | undefined}
+ */
+function documentToText(block) {
+  const source = isObject(block["source"]) ? block["source"] : {};
+
+  if (source["type"] === "text" && typeof source["data"] === "string") {
+    const title = typeof block["title"] === "string" && block["title"] !== "" ? `《${block["title"]}》\n` : "";
+    const context = typeof block["context"] === "string" && block["context"] !== "" ? `${block["context"]}\n` : "";
+    return { type: "text", text: `${context}${title}${source["data"]}` };
+  }
+
+  if (source["type"] === "content" && Array.isArray(source["content"])) {
+    const text = source["content"]
+      .filter((inner) => isObject(inner) && inner["type"] === "text")
+      .map((inner) => (typeof inner["text"] === "string" ? inner["text"] : ""))
+      .join("\n");
+    return text === "" ? undefined : { type: "text", text };
+  }
+
+  if (source["type"] === "base64") {
+    const media = typeof source["media_type"] === "string" ? source["media_type"] : "application/octet-stream";
+    const title = typeof block["title"] === "string" && block["title"] !== "" ? block["title"] : "未命名文件";
+    return {
+      type: "text",
+      text: `[用户附上了一份文件：${title}（${media}）。网关无法解析这种二进制格式，请让用户把内容贴成文本。]`,
+    };
+  }
+
+  return undefined;
+}
+
 /** Anthropic 的 block → OpenAI 的 content part。不认识的类型返回 undefined 丢弃。 */
 function toChatPart(block) {
   switch (block["type"]) {
     case "text":
       return { type: "text", text: typeof block["text"] === "string" ? block["text"] : "" };
+    case "document":
+      return documentToText(block);
     case "image": {
       const source = isObject(block["source"]) ? block["source"] : {};
       if (source["type"] === "base64" && typeof source["data"] === "string") {
@@ -95,7 +144,8 @@ function toChatPart(block) {
       return undefined;
     }
     default:
-      // thinking / document / 未知类型：上游不认，丢掉
+      // thinking / 未知类型：上游确实没有对应物，丢掉。
+      // （document 不再走这条 —— 见 documentToText。）
       return undefined;
   }
 }
