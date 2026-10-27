@@ -22,3 +22,8 @@ _probe-*.txt
 # (or a stray one copied in while debugging) can't be committed by accident.
 skills/**/token.json
 skills/**/*.workbuddy-auth.json
+# 临时抓包 / 调试脚本（排查上游时现造）
+_*.mjs
+_*.json
+*.bak-*
+*.bak

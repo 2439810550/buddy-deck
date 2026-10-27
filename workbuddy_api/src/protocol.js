@@ -13,10 +13,43 @@
  * @module workbuddy-api/protocol
  */
 
+/**
+ * 取出一个模型的倍率字符串。
+ *
+ * 上游把倍率放在 `billing.credits`（形如 `x0.29 credits`），
+ * 但早期版本和部分测试夹具把它平铺在顶层 `credits`。
+ * 两处都认，避免免费模型永远选不中。
+ */
+function modelCredits(model) {
+  const nested = model?.["billing"]?.["credits"];
+  if (typeof nested === "string") return nested.toLowerCase();
+  const flat = model?.["credits"];
+  if (typeof flat === "string") return flat.toLowerCase();
+  return "";
+}
+
 /** 归一化后的倍率，用来判断一个模型是不是免费。 */
 function isFree(model) {
-  const credits = typeof model?.["credits"] === "string" ? model["credits"].toLowerCase() : "";
+  const credits = modelCredits(model);
+  if (credits === "") return false;
   return credits.replace(/\s*credits\s*$/u, "").trim() === "x0.00";
+}
+
+/**
+ * 这个模型能不能真的吐出正文。
+ *
+ * 国内版的花名册里 20 个模型全部是 `onlyReasoning: true`，其中只有两个
+ * 允许关掉思考（`canDisableThinking: true`）。其余的在 maxTokens 不大时
+ * 会把预算全烧在 `reasoning_content` 上，`content` 回来是空串 ——
+ * 客户端看到的就是「打开了但没有输出」。
+ *
+ * 所以挑兜底模型时优先避开这类「只能思考、且关不掉」的模型。
+ */
+function canEmitContent(model) {
+  const reasoning = model?.["reasoning"];
+  if (reasoning === undefined || reasoning === null) return true;
+  if (reasoning["onlyReasoning"] !== true) return true;
+  return reasoning["canDisableThinking"] === true;
 }
 
 /**
@@ -27,12 +60,21 @@ function isFree(model) {
  * 没显式配置时优先挑免费的，因为这个适配层的典型用途就是「省掉官方额度」。
  */
 export function pickDefaultModel(list, configured) {
-  const ids = new Set(list.map((model) => model["id"]));
   if (typeof configured === "string" && configured.trim() !== "") {
     return { model: configured.trim(), reason: "配置的默认模型" };
   }
-  const free = list.find(isFree);
-  if (free !== undefined) return { model: free["id"], reason: "免费模型（x0.00）" };
+
+  // 第一优先：既免费、又能吐出正文的
+  const free = list.find((model) => isFree(model) && canEmitContent(model));
+  if (free !== undefined) return { model: free["id"], reason: "免费且能输出正文的模型（x0.00）" };
+
+  // 第二优先：只要不是「只能思考且关不掉」，就还能用
+  const usable = list.find(canEmitContent);
+  if (usable !== undefined) return { model: usable["id"], reason: "能输出正文的模型" };
+
+  // 全都只能思考 —— 矮子里拔将军，退回免费的那个，再退回第一个
+  const anyFree = list.find(isFree);
+  if (anyFree !== undefined) return { model: anyFree["id"], reason: "免费模型（x0.00，仅推理）" };
   if (list.length > 0) return { model: list[0]["id"], reason: "花名册第一个" };
   return { model: configured ?? "", reason: "花名册为空" };
 }

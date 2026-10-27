@@ -455,7 +455,18 @@ export function createGateway(options) {
         log(`${tag} 跳过 ${current}（冷却中）`);
         attempts.push(`${current}:冷却中`);
       } else {
-        result = await client.chatStream(credential, prepare(request), signal);
+        // ⚠ 必须把当前模型名写回 body。
+        //
+        // 以前这里只把 `current` 用在限流记账上，真正发给上游的 body
+        // 里还是客户端原本写的那个名字（比如 `default-model`）。
+        // 后果：别名解析看起来生效了（日志里印着「default-model →
+        // deepseek-v4.1-flash」），但上游收到的是 `default-model`，
+        // 它不认识，回 400「当前模型不可用」。
+        //
+        // Anthropic / Responses 两条路不受影响，因为它们走 `ctx.model`
+        // 自己重建了 body；只有原生 Chat Completions 这条直路漏了。
+        const preparedRequest = { ...request, model: current };
+        result = await client.chatStream(credential, prepare(preparedRequest), signal);
         if (result.ok) return { result, model: current, attempts };
         if (!isRateLimited(result)) return { result, model: current, attempts };
 
@@ -1560,13 +1571,18 @@ export function createGateway(options) {
       });
 
       if (outcome.error !== undefined) {
-        log(`[agent] 流中断：${outcome.error.result?.kind ?? "?"}`);
+        // 日志里打全：kind 只说「client」，看不出上游到底说了什么。
+        // status + 上游响应体前 300 字才能定位问题（曾经因为只打 kind，
+        // DSH 桌面端反复「流中断：client」查了很久）。
+        const failed = outcome.error.result ?? {};
+        const detail = typeof failed.message === "string" ? failed.message.replace(/\s+/g, " ").slice(0, 300) : "";
+        log(`[agent] 流中断：${failed.kind ?? "?"} (http ${failed.status ?? "?"})${detail === "" ? "" : " " + detail}`);
         if (!res.writableEnded) {
           // 头已经发出去了，不能改状态码 —— 用 SSE 事件报错
           const shaped = {
             error: {
-              message: `workbuddy upstream ${outcome.error.result?.kind ?? "error"}`,
-              type: outcome.error.result?.kind ?? "upstream_error",
+              message: `workbuddy upstream ${failed.kind ?? "error"}${failed.status === undefined ? "" : ` (http ${failed.status})`}${detail === "" ? "" : `: ${detail.slice(0, 200)}`}`,
+              type: failed.kind ?? "upstream_error",
             },
           };
           res.write(`data: ${JSON.stringify(shaped)}\n\n`);
